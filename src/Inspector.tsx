@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   AlignLeft,
   AlignCenter,
@@ -28,6 +29,7 @@ import {
   presets,
 } from "./model";
 import { ColorField, IconButton, NumberField, RangeField, Section } from "./ui";
+import { stableProps } from "./perf";
 export type InspectorProps = {
   page: Page;
   selected: DesignObject[];
@@ -42,7 +44,7 @@ export type InspectorProps = {
   ungroup: () => void;
   close: () => void;
 };
-export default function Inspector({
+function Inspector({
   page,
   selected,
   patchPage,
@@ -709,3 +711,9 @@ export default function Inspector({
     </aside>
   );
 }
+
+/**
+ * Re-renders only when the page, selection or background actually changed —
+ * not when the canvas zooms or a toast appears.
+ */
+export default memo(Inspector, stableProps);

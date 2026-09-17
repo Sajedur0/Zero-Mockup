@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -51,7 +52,7 @@ import {
   X,
 } from "lucide-react";
 import Konva from "konva";
-import JSZip from "jszip";
+import { isHandheld, rafThrottle, requestFonts, type FontNeed } from "./perf";
 import {
   baseObject,
   createProject,
@@ -80,6 +81,8 @@ const tools: { id: Tool; label: string; icon: typeof LayoutTemplate }[] = [
   { id: "brand", label: "Brand kit", icon: Palette },
 ];
 const noop = () => {};
+const BENGALI_TEXT = /[\u0980-\u09FF]/;
+
 export default function App() {
   const {
     project,
@@ -96,7 +99,10 @@ export default function App() {
   const [activeId, setActiveId] = useState(project.pages[0].id);
   const page = project.pages.find((p) => p.id === activeId) || project.pages[0];
   const [selected, setSelected] = useState<string[]>([]);
-  const selectedObjects = page.objects.filter((o) => selected.includes(o.id));
+  const selectedObjects = useMemo(
+    () => page.objects.filter((o) => selected.includes(o.id)),
+    [page.objects, selected],
+  );
   const [tool, setTool] = useState<Tool>("templates");
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
@@ -138,6 +144,10 @@ export default function App() {
     ),
   ]);
   const [dragOver, setDragOver] = useState(false);
+  /** Bumped when webfonts arrive so canvas text is measured again. */
+  const [fontEpoch, setFontEpoch] = useState(0);
+  /** Export needs every page mounted, even offscreen ones. */
+  const [renderAllStages, setRenderAllStages] = useState(false);
   const viewport = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const projectInput = useRef<HTMLInputElement>(null);
@@ -160,6 +170,51 @@ export default function App() {
     top: number;
   } | null>(null);
   const notify = useCallback((message: string) => setToast(message), []);
+  useEffect(() => {
+    // Both signals ("zero:fonts-updated" from our own loader and the browser's
+    // "loadingdone") usually arrive for the same batch, so they are collapsed
+    // into one re-measure of the canvas text.
+    let timer = 0;
+    const onFonts = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setFontEpoch((epoch) => epoch + 1), 120);
+    };
+    window.addEventListener("zero:fonts-updated", onFonts);
+    // A face can also start loading on its own (a DOM preview in the library,
+    // an imported project), so listen to the browser directly as well.
+    document.fonts?.addEventListener?.("loadingdone", onFonts);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("zero:fonts-updated", onFonts);
+      document.fonts?.removeEventListener?.("loadingdone", onFonts);
+    };
+  }, []);
+  /**
+   * Ask for the faces the project's text objects draw with. Canvas text does
+   * not trigger a webfont download the way DOM text does, so without this the
+   * first frame of e.g. a Bengali headline used the fallback font.
+   */
+  useEffect(() => {
+    const needs: FontNeed[] = [];
+    for (const item of project.pages)
+      for (const o of item.objects)
+        if (o.kind === "text") {
+          if (/Playfair/i.test(o.fontFamily || ""))
+            needs.push({ spec: '700 20px "Playfair Display"' });
+          if (o.text && BENGALI_TEXT.test(o.text))
+            needs.push({
+              spec: '400 20px "Noto Sans Bengali"',
+              sample: "বাংলা",
+            });
+        }
+    if (needs.length) requestFonts(needs);
+  }, [project.pages]);
+  /**
+   * Phones only keep stages for the pages near the viewport alive. Every
+   * mounted stage is another pair of canvases to resize on each pinch or
+   * zoom, so a 3-page project used to pay three times over.
+   */
+  const deferArtboards = !renderAllStages && isHandheld();
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(""), 3400);
@@ -220,6 +275,74 @@ export default function App() {
     if (stage) stages.current.set(id, stage);
     else stages.current.delete(id);
   }, []);
+  // On phones the pages sit in a horizontal strip, so bring the page the
+  // user selected (from the page tabs or a layer) into view.
+  useEffect(() => {
+    if (!isHandheld()) return;
+    viewport.current
+      ?.querySelector<HTMLElement>(".artboard-item.is-active")
+      ?.scrollIntoView({
+        block: "nearest",
+        inline: "center",
+        behavior: "smooth",
+      });
+  }, [page.id]);
+  /**
+   * Stable artboard handlers. Artboards only re-render when their own page,
+   * zoom or selection changes, which is what keeps dragging smooth on
+   * phones; recreating these callbacks on every render would defeat that.
+   */
+  const pinchZoom = useMemo(
+    () =>
+      rafThrottle((ax: number, ay: number, bx: number, by: number) => {
+        const el = viewport.current,
+          g = gesture.current;
+        if (!el || !g || !g.distance) return;
+        const next = Math.min(
+          1,
+          Math.max(0.05, (g.scale * Math.hypot(ax - bx, ay - by)) / g.distance),
+        );
+        setZoom((current) =>
+          current !== null && Math.abs(current - next) < 0.002 ? current : next,
+        );
+        el.scrollLeft = g.scrollX - ((ax + bx) / 2 - g.x);
+        el.scrollTop = g.scrollY - ((ay + by) / 2 - g.y);
+      }),
+    [],
+  );
+  const onArtboardSelect = useCallback((ids: string[]) => setSelected(ids), []);
+  const onArtboardChange = useCallback(
+    (pageId: string, objects: DesignObject[]) =>
+      update(
+        (pr) => ({
+          ...pr,
+          pages: pr.pages.map((item) =>
+            item.id === pageId ? { ...item, objects } : item,
+          ),
+        }),
+        "Canvas edited",
+      ),
+    [update],
+  );
+  const onArtboardActivate = useCallback((pageId: string) => {
+    setActiveId(pageId);
+  }, []);
+  const onArtboardEditText = useCallback((_pageId: string, id: string) => {
+    setSelected([id]);
+    setRightOpen(true);
+    setMobilePanel("properties");
+    setTimeout(
+      () =>
+        document
+          .querySelector<HTMLTextAreaElement>('[aria-label="Text content"]')
+          ?.focus(),
+      50,
+    );
+  }, []);
+  const onArtboardContext = useCallback(
+    (_pageId: string, pos: { x: number; y: number }) => setContext(pos),
+    [],
+  );
   const patchPage = useCallback(
     (patch: Partial<Page>, label = "Page updated") =>
       update(
@@ -544,8 +667,20 @@ export default function App() {
   const exportProject = async () => {
     setExporting(true);
     const pages = exportScope === "all" ? project.pages : [page];
+    let mountedAll = false;
     try {
       await document.fonts.ready;
+      if (pages.some((p) => !stages.current.get(p.id))) {
+        // Offscreen pages are not mounted on phones; mount them for export.
+        setExportProgress("Preparing pages…");
+        mountedAll = true;
+        setRenderAllStages(true);
+        await new Promise((resolve) => setTimeout(resolve, 260));
+        await new Promise(requestAnimationFrame);
+      }
+      // JSZip is only needed for multi-page exports, so it is not part of
+      // the startup bundle any more.
+      const { default: JSZip } = await import("jszip");
       const zip = new JSZip();
       for (let i = 0; i < pages.length; i++) {
         const p = pages[i];
@@ -591,6 +726,9 @@ export default function App() {
     } finally {
       setExporting(false);
       setExportProgress("");
+      // Give the browser a moment, then let offscreen pages go back to
+      // their lightweight placeholders on phones.
+      if (mountedAll) setTimeout(() => setRenderAllStages(false), 800);
     }
   };
   useEffect(() => {
@@ -1130,34 +1268,41 @@ export default function App() {
                   scrollX: viewport.current.scrollLeft,
                   scrollY: viewport.current.scrollTop,
                 };
+              } else if (
+                e.touches.length === 1 &&
+                panMode &&
+                viewport.current
+              ) {
+                const [a] = Array.from(e.touches);
+                gesture.current = {
+                  distance: 0,
+                  scale,
+                  x: a.clientX,
+                  y: a.clientY,
+                  scrollX: viewport.current.scrollLeft,
+                  scrollY: viewport.current.scrollTop,
+                };
               }
             }}
             onTouchMove={(e) => {
-              if (
-                e.touches.length === 2 &&
-                gesture.current &&
-                viewport.current
-              ) {
-                const [a, b] = Array.from(e.touches);
-                const g = gesture.current;
-                setZoom(
-                  Math.min(
-                    1,
-                    Math.max(
-                      0.05,
-                      (g.scale *
-                        Math.hypot(
-                          a.clientX - b.clientX,
-                          a.clientY - b.clientY,
-                        )) /
-                        g.distance,
-                    ),
-                  ),
+              const touches = Array.from(e.touches);
+              if (touches.length === 2) {
+                // Pinch is coalesced into one update per frame: every zoom
+                // step resizes the Konva canvases, so doing it per touch
+                // event was the slowest interaction in the editor.
+                pinchZoom(
+                  touches[0].clientX,
+                  touches[0].clientY,
+                  touches[1].clientX,
+                  touches[1].clientY,
                 );
+              } else if (touches.length === 1 && panMode && viewport.current) {
+                const g = gesture.current;
+                if (!g) return;
                 viewport.current.scrollLeft =
-                  g.scrollX - ((a.clientX + b.clientX) / 2 - g.x);
+                  g.scrollX - (touches[0].clientX - g.x);
                 viewport.current.scrollTop =
-                  g.scrollY - ((a.clientY + b.clientY) / 2 - g.y);
+                  g.scrollY - (touches[0].clientY - g.y);
               }
             }}
             onTouchEnd={() => (gesture.current = null)}
@@ -1234,39 +1379,17 @@ export default function App() {
                       scale={scale}
                       active={p.id === page.id}
                       selected={selected}
-                      onSelect={(ids) => {
-                        setSelected(ids);
-                      }}
-                      onChange={(objects) =>
-                        update(
-                          (pr) => ({
-                            ...pr,
-                            pages: pr.pages.map((item) =>
-                              item.id === p.id ? { ...item, objects } : item,
-                            ),
-                          }),
-                          "Canvas edited",
-                        )
-                      }
-                      onActivate={() => setActiveId(p.id)}
-                      onEditText={(id) => {
-                        setSelected([id]);
-                        showProperties();
-                        setTimeout(
-                          () =>
-                            document
-                              .querySelector<HTMLTextAreaElement>(
-                                '[aria-label="Text content"]',
-                              )
-                              ?.focus(),
-                          50,
-                        );
-                      }}
-                      onContext={(pos) => setContext(pos)}
+                      onSelect={onArtboardSelect}
+                      onChange={onArtboardChange}
+                      onActivate={onArtboardActivate}
+                      onEditText={onArtboardEditText}
+                      onContext={onArtboardContext}
                       register={register}
                       grid={grid}
                       selectMode={selectMode}
                       panMode={panMode}
+                      defer={deferArtboards}
+                      fontEpoch={fontEpoch}
                     />
                   </div>
                   <div className="artboard-caption">

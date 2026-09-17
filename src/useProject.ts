@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createProject, isProject, type Project } from "./model";
+import { onIdle, structurallyEqual } from "./perf";
 export type HistoryEntry = { project: Project; label: string };
 const STORAGE = "zero-mockup-project-v1";
 function initial() {
@@ -11,6 +12,7 @@ function initial() {
   }
   return createProject();
 }
+
 export function useProject() {
   const [history, setHistory] = useState<HistoryEntry[]>(() => [
     { project: initial(), label: "Project opened" },
@@ -25,8 +27,11 @@ export function useProject() {
   const update = useCallback(
     (fn: (p: Project) => Project, label = "Design updated") => {
       const old = historyRef.current[indexRef.current].project;
-      const next = fn(structuredClone(old));
-      if (JSON.stringify(old) === JSON.stringify(next)) return;
+      // Updates are immutable (`{ ...page, objects: [...] }`), so history
+      // entries share untouched branches instead of deep-cloning megabytes
+      // of base64 artwork 70 times over.
+      const next = fn(old);
+      if (next === old || structurallyEqual(old, next)) return;
       const entries = [
         ...historyRef.current.slice(0, indexRef.current + 1),
         { project: next, label },
@@ -53,14 +58,20 @@ export function useProject() {
       }
     };
     window.addEventListener("pagehide", saveOnExit);
-    const t = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE, JSON.stringify(project));
-        setSaveState("All changes saved");
-      } catch {
-        setSaveState("Storage full · save project file");
-      }
-    }, 600);
+    // Serialising the project blocks the main thread, so wait for a pause in
+    // typing/dragging and then write while the browser is idle.
+    const t = setTimeout(
+      () =>
+        onIdle(() => {
+          try {
+            localStorage.setItem(STORAGE, JSON.stringify(project));
+            setSaveState("All changes saved");
+          } catch {
+            setSaveState("Storage full · save project file");
+          }
+        }),
+      400,
+    );
     return () => {
       clearTimeout(t);
       window.removeEventListener("pagehide", saveOnExit);

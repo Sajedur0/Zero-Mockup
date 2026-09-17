@@ -819,6 +819,11 @@ h3 {
   outline-offset: 0;
   overflow: hidden;
 }
+/* Wrapper around each Konva stage (also the placeholder for pages that are
+   scrolled out of view on touch devices). */
+.artboard-stage-host {
+  position: relative;
+}
 .artboard-canvas.active {
   outline: 1.5px solid #df8c67;
   outline-offset: 4px;

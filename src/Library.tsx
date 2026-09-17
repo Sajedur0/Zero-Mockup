@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useState } from "react";
 import {
   Search,
   ArrowUpRight,
@@ -34,6 +34,7 @@ import {
 } from "./model";
 import type { HistoryEntry } from "./useProject";
 import { ColorField, IconButton } from "./ui";
+import { requestFonts, stableProps } from "./perf";
 const IconLibrary = lazy(() => import("./IconLibrary"));
 export type Tool =
   | "templates"
@@ -102,7 +103,7 @@ export function TemplateThumb({
     </button>
   );
 }
-export default function Library({
+function Library({
   tool,
   project,
   page,
@@ -124,6 +125,15 @@ export default function Library({
   const [elementsTab, setElementsTab] = useState("Shapes");
   const [brandColor, setBrandColor] = useState("#e87b53");
   const [editingLayer, setEditingLayer] = useState<string | null>(null);
+  // Playfair Display and Noto Sans Bengali are only fetched when the text
+  // tools (which preview them) are actually opened.
+  useEffect(() => {
+    if (tool === "text")
+      requestFonts([
+        { spec: '700 20px "Playfair Display"' },
+        { spec: '400 20px "Noto Sans Bengali"', sample: "বাংলা" },
+      ]);
+  }, [tool]);
   const title = {
     templates: "Templates",
     frames: "Device frames",
@@ -768,3 +778,9 @@ export default function Library({
     </aside>
   );
 }
+
+/**
+ * Same deal as the inspector: ignore callback identity so tool panels are
+ * not re-rendered while the canvas is being zoomed or panned.
+ */
+export default memo(Library, stableProps);
