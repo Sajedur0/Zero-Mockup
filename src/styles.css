@@ -891,6 +891,58 @@ h3 {
   background: #e2e8d9;
   color: #657a51;
 }
+/* Directional pad for the pan tool: precise up/down/left/right movement on
+   touch screens, where a drag is never quite as exact. */
+.nudge-pad {
+  position: absolute;
+  left: 16px;
+  bottom: 78px;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(3, 34px);
+  grid-template-rows: repeat(3, 34px);
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #ffffffee;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 10px 26px #23311b14;
+}
+[data-theme="dark"] .nudge-pad {
+  background: #252b25ee;
+}
+.nudge-pad > button {
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--subtle);
+  background: var(--input);
+  border: 1px solid transparent;
+  touch-action: none;
+}
+.nudge-pad > button:hover,
+.nudge-pad > button:focus-visible {
+  background: var(--hover);
+  color: var(--ink);
+}
+.nudge-pad > button:active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.nudge-pad > .is-up {
+  grid-area: 1 / 2;
+}
+.nudge-pad > .is-left {
+  grid-area: 2 / 1;
+}
+.nudge-pad > .is-right {
+  grid-area: 2 / 3;
+}
+.nudge-pad > .is-down {
+  grid-area: 3 / 2;
+}
 .canvas-bottom {
   height: 61px;
   flex-shrink: 0;

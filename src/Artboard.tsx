@@ -655,14 +655,14 @@ function Artboard({
     const stage = stageRef.current;
     if (!stage) return;
     const nodes =
-      active && !preview
+      active && !preview && !panMode
         ? (selected
             .map((id) => stage.findOne("#o-" + id))
             .filter(Boolean) as Konva.Node[])
         : [];
     trRef.current?.nodes(nodes);
     trRef.current?.getLayer()?.batchDraw();
-  }, [selected, active, page.objects, preview, mounted, fontEpoch]);
+  }, [selected, active, page.objects, preview, panMode, mounted, fontEpoch]);
   /**
    * Guides and the marquee are painted straight into the overlay layer.
    * Setting them through React state meant re-rendering every object on the
@@ -798,17 +798,20 @@ function Artboard({
       window.removeEventListener("pointercancel", finish);
     };
   });
+  /** The ids a press on `o` should act on — its whole group, or just itself. */
+  const groupIds = (o: DesignObject) =>
+    o.groupId
+      ? page.objects
+          .filter((n) => n.groupId === o.groupId && !n.locked)
+          .map((n) => n.id)
+      : [o.id];
   const pick = (
     o: DesignObject,
     e: KonvaEventObject<MouseEvent | TouchEvent | PointerEvent>,
   ) => {
     if (preview || panMode) return;
     onActivate(page.id);
-    const group = o.groupId
-      ? page.objects
-          .filter((n) => n.groupId === o.groupId && !n.locked)
-          .map((n) => n.id)
-      : [o.id];
+    const group = groupIds(o);
     const shift = ("shiftKey" in e.evt && e.evt.shiftKey) || selectMode;
     onSelect(
       shift
@@ -978,6 +981,11 @@ function Artboard({
                     listening={!preview}
                     onPointerDown={(e) => {
                       if (!panMode) return;
+                      // Pressing with the pan tool selects too, so the arrow pad
+                      // and the properties panel keep working on this object.
+                      onActivate(page.id);
+                      onSelect(groupIds(o));
+                      if (o.locked) return;
                       // The press stops here so the viewport does not pan while
                       // an object is being moved.
                       e.cancelBubble = true;

@@ -7,6 +7,10 @@ import {
   type ChangeEvent,
 } from "react";
 import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   ArrowUpRight,
   Check,
   CheckCheck,
@@ -459,6 +463,58 @@ export default function App() {
     },
     [patchPage, page],
   );
+  /**
+   * Moves the selection one step up/down/left/right — the arrow keys, and the
+   * pad that appears with the pan tool. With nothing selected it moves the
+   * workspace view instead, which is what a pan tool is for.
+   */
+  const nudge = (dx: number, dy: number, step = 1) => {
+    if (!selected.length) {
+      const el = viewport.current;
+      if (el) {
+        el.scrollLeft += dx * step;
+        el.scrollTop += dy * step;
+      }
+      return;
+    }
+    if (selectedObjects.every((o) => o.locked)) {
+      notify("Unlock the layer before moving it.");
+      return;
+    }
+    update(
+      (pr) => ({
+        ...pr,
+        pages: pr.pages.map((item) =>
+          item.id === page.id
+            ? {
+                ...item,
+                objects: item.objects.map((o) =>
+                  selected.includes(o.id) && !o.locked
+                    ? { ...o, x: o.x + dx * step, y: o.y + dy * step }
+                    : o,
+                ),
+              }
+            : item,
+        ),
+      }),
+      "Objects nudged",
+      // A burst of nudges (or a held button) is one undo step, not twenty.
+      true,
+    );
+  };
+  /** Step of the on-screen pad: ~4 screen pixels at the current zoom. */
+  const nudgeStep = Math.max(1, Math.round(4 / scale));
+  const nudgeTimer = useRef(0);
+  const stopNudge = () => {
+    window.clearInterval(nudgeTimer.current);
+    nudgeTimer.current = 0;
+  };
+  const startNudge = (dx: number, dy: number, step: number) => {
+    stopNudge();
+    nudge(dx, dy, step);
+    nudgeTimer.current = window.setInterval(() => nudge(dx, dy, step), 110);
+  };
+  useEffect(() => stopNudge, []);
   const remove = useCallback(() => {
     const removable = selectedObjects.filter((o) => !o.locked).map((o) => o.id);
     if (!removable.length) {
@@ -916,36 +972,14 @@ export default function App() {
         e.preventDefault();
         e.shiftKey ? ungroup() : group();
       } else if (
-        ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key) &&
-        selected.length
+        ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)
       ) {
         e.preventDefault();
         const d = e.shiftKey ? 10 : 1;
-        patchPage(
-          {
-            objects: page.objects.map((o) =>
-              selected.includes(o.id) && !o.locked
-                ? {
-                    ...o,
-                    x:
-                      o.x +
-                      (e.key === "ArrowLeft"
-                        ? -d
-                        : e.key === "ArrowRight"
-                          ? d
-                          : 0),
-                    y:
-                      o.y +
-                      (e.key === "ArrowUp"
-                        ? -d
-                        : e.key === "ArrowDown"
-                          ? d
-                          : 0),
-                  }
-                : o,
-            ),
-          },
-          "Objects nudged",
+        nudge(
+          e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0,
+          e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0,
+          d,
         );
       } else if (e.key === "?") setModal("shortcuts");
       else if (e.key.toLowerCase() === "v") setPanMode(false);
@@ -1537,6 +1571,41 @@ export default function App() {
               </button>
             </div>
           </div>
+          {panMode && (
+            <div
+              className="nudge-pad"
+              role="group"
+              aria-label="Move"
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={stopNudge}
+              onPointerLeave={stopNudge}
+              onPointerCancel={stopNudge}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              {(
+                [
+                  ["up", "Move up", ArrowUp, 0, -1, "is-up"],
+                  ["left", "Move left", ArrowLeft, -1, 0, "is-left"],
+                  ["right", "Move right", ArrowRight, 1, 0, "is-right"],
+                  ["down", "Move down", ArrowDown, 0, 1, "is-down"],
+                ] as const
+              ).map(([key, label, Icon, dx, dy, place]) => (
+                <button
+                  key={key}
+                  className={place}
+                  aria-label={
+                    selected.length ? label : label.replace("Move", "Pan")
+                  }
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    startNudge(dx, dy, selected.length ? nudgeStep : 48);
+                  }}
+                >
+                  <Icon size={14} />
+                </button>
+              ))}
+            </div>
+          )}
           <div className="canvas-bottom">
             <div className="canvas-hint">
               {panMode ? (
@@ -2044,6 +2113,7 @@ export default function App() {
               ["Fit to screen", "⌘ 0"],
               ["Save project", "⌘ S"],
               ["Select / pan", "V / H"],
+              ["Move with the pan tool", "Drag, or the arrow pad"],
               ["Deselect / close", "Esc"],
             ].map(([label, key]) => (
               <div key={label}>
@@ -2053,8 +2123,10 @@ export default function App() {
             ))}
           </div>
           <p className="muted-note">
-            On touchscreens, pinch to zoom and pan with two fingers. Enable
-            Select mode to choose multiple objects.
+            On touchscreens, pinch to zoom and pan with two fingers; with the
+            pan tool, drag an object to move it freely and use the arrow pad (or
+            the arrow keys) to nudge it. Enable Select mode to choose multiple
+            objects.
           </p>
         </Modal>
       )}

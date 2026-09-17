@@ -479,3 +479,71 @@ test("pan tool moves objects freely and a single undo restores them", async ({
   await page.getByRole("button", { name: "Undo (Ctrl+Z)" }).click();
   await expect(page.getByLabel("X", { exact: true })).toHaveValue("100");
 });
+
+test("pan tool arrow pad moves the selection up, down, left and right", async ({
+  page,
+}) => {
+  const bounds = await page.locator(".artboard-canvas").first().boundingBox();
+  if (!bounds) throw Error("Missing canvas");
+  const s = bounds.width / 1080;
+
+  await expect(page.locator(".nudge-pad")).toHaveCount(0);
+  await page.getByRole("button", { name: /Pan tool/ }).click();
+  await expect(page.locator(".nudge-pad")).toBeVisible();
+
+  // Pressing an object with the pan tool selects it and the pad follows.
+  await page.mouse.click(bounds.x + 200 * s, bounds.y + 260 * s);
+  await expect(page.getByLabel("Layer name")).toHaveValue("Headline");
+  await expect(page.getByLabel("Move right")).toBeVisible();
+
+  const x = page.getByLabel("X", { exact: true });
+  const y = page.getByLabel("Y", { exact: true });
+  const start = Number(await x.inputValue());
+
+  await page.getByLabel("Move right").click();
+  expect(Number(await x.inputValue())).toBeGreaterThan(start);
+  await page.getByLabel("Move up").click();
+  expect(Number(await y.inputValue())).toBeLessThan(260);
+  await page.getByLabel("Move left").click();
+  await expect(x).toHaveValue(String(start));
+  await page.getByLabel("Move down").click();
+  await expect(y).toHaveValue("260");
+
+  // The whole burst is one history step.
+  await page.getByLabel("Move right").click();
+  await expect(x).not.toHaveValue(String(start));
+  await page.getByRole("button", { name: "Undo (Ctrl+Z)" }).click();
+  await expect(x).toHaveValue(String(start));
+
+  // With nothing selected the pad pans the workspace instead.
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("Pan right")).toBeVisible();
+  const before = await page.evaluate(
+    () => document.querySelector(".canvas-viewport")!.scrollLeft,
+  );
+  await page.getByLabel("Pan right").click();
+  expect(
+    await page.evaluate(
+      () => document.querySelector(".canvas-viewport")!.scrollLeft,
+    ),
+  ).toBeGreaterThan(before);
+});
+
+test("arrow keys nudge the selection and undo once per burst", async ({
+  page,
+}) => {
+  const bounds = await page.locator(".artboard-canvas").first().boundingBox();
+  if (!bounds) throw Error("Missing canvas");
+  const s = bounds.width / 1080;
+  await page.mouse.click(bounds.x + 200 * s, bounds.y + 260 * s);
+  const x = page.getByLabel("X", { exact: true });
+  const start = Number(await x.inputValue());
+
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowRight");
+  await expect(x).toHaveValue(String(start + 5));
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect(page.getByLabel("Y", { exact: true })).toHaveValue("270");
+
+  await page.getByRole("button", { name: "Undo (Ctrl+Z)" }).click();
+  await expect(x).toHaveValue(String(start));
+});
