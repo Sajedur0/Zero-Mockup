@@ -25,6 +25,30 @@
 body {
   margin: 0;
 }
+/**
+ * The editor is a canvas app, not a document: pressing and holding (or
+ * dragging with the mouse) must never select text or pop the browser's
+ * copy/callout bubble. Fields that really hold text opt back in below.
+ */
+html,
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+img,
+canvas {
+  -webkit-user-drag: none;
+  user-select: none;
+}
 button,
 input,
 select,

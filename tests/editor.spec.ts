@@ -420,3 +420,62 @@ test("page tabs open a hold menu and the last page becomes a blank page", async 
   expect(saved.pages).toHaveLength(1);
   expect(saved.pages[0].objects).toEqual([]);
 });
+
+test("nothing is text-selectable except real fields", async ({ page }) => {
+  // The editor is a canvas app: pressing and holding must not select labels.
+  await page.locator(".page-tabs > button:not(.icon-button)").first().hover();
+  await page.mouse.down();
+  await page.mouse.move(320, 300, { steps: 6 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("");
+  expect(
+    await page.evaluate(() => getComputedStyle(document.body).userSelect),
+  ).toBe("none");
+
+  // Inputs and text areas still behave like text fields.
+  const label = page.getByLabel("Layer name");
+  await label.fill("renamed");
+  await label.click();
+  await page.keyboard.press("Control+a");
+  expect(await page.evaluate(() => window.getSelection()?.toString())).not.toBe(
+    "",
+  );
+  await label.fill("Headline");
+});
+
+test("pan tool moves objects freely and a single undo restores them", async ({
+  page,
+}) => {
+  const bounds = await page.locator(".artboard-canvas").first().boundingBox();
+  if (!bounds) throw Error("Missing canvas");
+  const s = bounds.width / 1080;
+
+  await page.getByRole("button", { name: /Pan tool/ }).click();
+  await page.mouse.click(bounds.x + 200 * s, bounds.y + 260 * s);
+  await expect(page.getByLabel("Layer name")).toHaveValue("Headline");
+
+  await page.mouse.move(bounds.x + 200 * s, bounds.y + 260 * s);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 340 * s, bounds.y + 300 * s, { steps: 10 });
+  await page.mouse.up();
+
+  // Free move: it follows the pointer instead of snapping to a guide.
+  expect(Number(await page.getByLabel("X", { exact: true }).inputValue())).toBe(
+    240,
+  );
+  expect(Number(await page.getByLabel("Y", { exact: true }).inputValue())).toBe(
+    260,
+  );
+
+  await page.waitForTimeout(700);
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("zero-mockup-project-v1")!),
+  );
+  const headline = saved.pages[0].objects.find(
+    (o: { name: string }) => o.name === "Headline",
+  );
+  expect([headline.x, headline.y]).toEqual([240, 260]);
+
+  await page.getByRole("button", { name: "Undo (Ctrl+Z)" }).click();
+  await expect(page.getByLabel("X", { exact: true })).toHaveValue("100");
+});

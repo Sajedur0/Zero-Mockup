@@ -575,6 +575,11 @@ export type ArtboardProps = {
   defer?: boolean;
   /** Bumped when webfonts finish loading so text is measured again. */
   fontEpoch?: number;
+  /**
+   * Set while the pan tool is moving an object, so the scroll container knows
+   * not to pan the viewport at the same time.
+   */
+  panGrabRef: { current: boolean };
 };
 function Artboard({
   page,
@@ -594,6 +599,7 @@ function Artboard({
   panMode,
   defer,
   fontEpoch,
+  panGrabRef,
 }: ArtboardProps) {
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
@@ -606,11 +612,16 @@ function Artboard({
     null,
   );
   const guidesRef = useRef<{ x?: number; y?: number }>({});
+  /** Id of the object the pan tool is currently moving, if any. */
+  const [grab, setGrab] = useState<string | null>(null);
   const [mounted, setMounted] = useState(!defer);
   const dragStart = useRef<
     | {
-        x: number;
-        y: number;
+        /** Start position of the dragged node; only the select tool sets it. */
+        x?: number;
+        y?: number;
+        /** Pointer position when the move started, in page coordinates. */
+        point?: { x: number; y: number };
         positions: { id: string; x: number; y: number }[];
         targets: { x: number; y: number; width: number; height: number }[];
       }
@@ -699,6 +710,94 @@ function Artboard({
     const p = stageRef.current?.getPointerPosition();
     return p ? { x: p.x / scale, y: p.y / scale } : null;
   };
+  /**
+   * Keep receiving pointer events even if the finger leaves the stage, so a
+   * pan-tool move does not stop halfway. The stage helper is used instead of
+   * the DOM one because Konva retargets pointer events to the capture target.
+   */
+  const initPointerCapture = (e: {
+    evt: { pointerId: number };
+    target: Konva.Node;
+  }) => {
+    try {
+      e.target.getStage()?.setPointerCapture?.(e.evt.pointerId);
+    } catch {
+      /* not supported — the move just ends at the edge */
+    }
+  };
+  /** Where the pointer of this event landed, in page coordinates. */
+  const pressPoint = (e: { clientX: number; clientY: number }) => {
+    const box = stageRef.current?.container().getBoundingClientRect();
+    if (!box) return null;
+    return {
+      x: (e.clientX - box.left) / scale,
+      y: (e.clientY - box.top) / scale,
+    };
+  };
+  /**
+   * The pan tool moves whatever object is under the pointer, like the move
+   * tool in a drawing app; empty canvas still pans the viewport (that part is
+   * handled by the `.canvas-viewport` element in App).
+   */
+  const grabObject = (id: string, e: { clientX: number; clientY: number }) => {
+    const point = pressPoint(e);
+    if (!point) return;
+    // Grouped objects move together, exactly like dragging them with the
+    // select tool.
+    const object = page.objects.find((o) => o.id === id);
+    const group = object?.groupId;
+    dragStart.current = {
+      point,
+      positions: page.objects
+        .filter((o) => o.id === id || (!!group && o.groupId === group))
+        .filter((o) => !o.locked)
+        .map((o) => ({ id: o.id, x: o.x, y: o.y })),
+      targets: [],
+    };
+    setGrab(id);
+  };
+  const releaseObject = () => {
+    dragStart.current = undefined;
+    panGrabRef.current = false;
+    setGrab(null);
+    // Back to the "you can grab this" cursor if the pointer is still there.
+    const container = stageRef.current?.container();
+    if (container?.style.cursor === "grabbing") container.style.cursor = "grab";
+  };
+  /**
+   * Writes the grabbed objects back to the project. The final position is read
+   * from the Konva nodes, so it stays right no matter where the release came
+   * from, and it lands as one history entry — a single undo puts it back.
+   */
+  const commitGrab = () => {
+    const d = dragStart.current;
+    if (!d) return;
+    const objects = page.objects.map((o) => {
+      if (!d.positions.some((pos) => pos.id === o.id)) return o;
+      const node = stageRef.current?.findOne<Konva.Node>("#o-" + o.id);
+      if (!node) return o;
+      const x = Math.round(node.x()),
+        y = Math.round(node.y());
+      return x === o.x && y === o.y ? o : { ...o, x, y };
+    });
+    releaseObject();
+    if (objects.some((o, i) => o !== page.objects[i]))
+      onChange(page.id, objects);
+  };
+  /**
+   * A pointer released outside the stage (or a cancelled gesture) would
+   * otherwise leave the object stuck to the cursor.
+   */
+  useEffect(() => {
+    if (!grab) return;
+    const finish = () => commitGrab();
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    return () => {
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+  });
   const pick = (
     o: DesignObject,
     e: KonvaEventObject<MouseEvent | TouchEvent | PointerEvent>,
@@ -782,7 +881,22 @@ function Artboard({
             }
           }
         }}
-        onPointerMove={() => {
+        onPointerMove={(e) => {
+          // Pan tool: the grabbed object follows the pointer 1:1 — no
+          // snapping, no page bounds, it simply goes where the pointer goes.
+          const d = dragStart.current;
+          if (grab && d?.point) {
+            const point = pressPoint(e.evt);
+            if (!point) return;
+            const dx = point.x - d.point.x,
+              dy = point.y - d.point.y;
+            for (const pos of d.positions)
+              stageRef.current
+                ?.findOne<Konva.Node>("#o-" + pos.id)
+                ?.position({ x: pos.x + dx, y: pos.y + dy });
+            stageRef.current?.batchDraw();
+            return;
+          }
           if (!startRef.current) return;
           const p = getPoint();
           if (!p) return;
@@ -795,7 +909,17 @@ function Artboard({
           boxRef.current = next;
           paintBox(next);
         }}
+        onPointerCancel={() => {
+          if (grab) commitGrab();
+          startRef.current = null;
+          boxRef.current = null;
+          paintBox(null);
+        }}
         onPointerUp={() => {
+          if (grab) {
+            commitGrab();
+            return;
+          }
           const box = boxRef.current;
           if (box && Math.abs(box.w) + Math.abs(box.h) > 15) {
             const r = {
@@ -846,8 +970,29 @@ function Artboard({
                     height={o.height}
                     rotation={o.rotation}
                     opacity={o.opacity}
-                    draggable={!o.locked && !preview && !panMode}
-                    listening={!preview && !panMode}
+                    draggable={!o.locked && !panMode && !preview}
+                    // Pan mode keeps objects listening: pressing one with the
+                    // pan tool is how it gets moved. Empty canvas still pans
+                    // the viewport, because there the hit test finds the stage
+                    // and the press reaches the scroll container.
+                    listening={!preview}
+                    onPointerDown={(e) => {
+                      if (!panMode) return;
+                      // The press stops here so the viewport does not pan while
+                      // an object is being moved.
+                      e.cancelBubble = true;
+                      panGrabRef.current = true;
+                      initPointerCapture(e);
+                      grabObject(o.id, e.evt);
+                    }}
+                    onMouseEnter={(e) => {
+                      if (panMode && !preview)
+                        e.target.getStage()!.container().style.cursor = "grab";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (panMode && !preview)
+                        e.target.getStage()!.container().style.cursor = "";
+                    }}
                     onClick={(e) => pick(o, e)}
                     onTap={(e) => pick(o, e)}
                     onDblClick={() => {
@@ -935,18 +1080,20 @@ function Artboard({
                             break;
                           }
                       paintGuides(g);
-                      if (d)
+                      if (d && d.x !== undefined && d.y !== undefined)
                         d.positions.forEach((p) => {
                           if (p.id !== o.id)
                             stageRef.current?.findOne("#o-" + p.id)?.position({
-                              x: p.x + n.x() - d.x,
-                              y: p.y + n.y() - d.y,
+                              x: p.x + n.x() - d.x!,
+                              y: p.y + n.y() - d.y!,
                             });
                         });
                     }}
                     onDragEnd={(e) => {
                       const d = dragStart.current;
                       paintGuides({});
+                      const startX = d?.x ?? e.target.x(),
+                        startY = d?.y ?? e.target.y();
                       onChange(
                         page.id,
                         page.objects.map((n) => {
@@ -954,8 +1101,8 @@ function Artboard({
                           return p
                             ? {
                                 ...n,
-                                x: Math.round(p.x + e.target.x() - d!.x),
-                                y: Math.round(p.y + e.target.y() - d!.y),
+                                x: Math.round(p.x + e.target.x() - startX),
+                                y: Math.round(p.y + e.target.y() - startY),
                               }
                             : n;
                         }),

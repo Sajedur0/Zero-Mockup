@@ -115,6 +115,8 @@ export default function App() {
   const scale = zoom ?? fit;
   const [grid, setGrid] = useState(false);
   const [panMode, setPanMode] = useState(false);
+  /** True while the pan tool is moving an object instead of the viewport. */
+  const panGrabRef = useRef(false);
   const [selectMode, setSelectMode] = useState(false);
   const [dark, setDark] = useState(() => {
     try {
@@ -1201,9 +1203,15 @@ export default function App() {
             <MousePointer2 size={17} />
           </IconButton>
           <IconButton
-            label="Pan tool (H)"
+            label="Pan tool (H) — move objects freely or pan the canvas"
             active={panMode}
-            onClick={() => setPanMode(true)}
+            onClick={() => {
+              setPanMode(true);
+              // The hint line is hidden on phones, so say it out loud once.
+              notify(
+                "Pan tool: drag an object to move it freely, or drag the canvas to pan.",
+              );
+            }}
           >
             <Hand size={17} />
           </IconButton>
@@ -1334,7 +1342,12 @@ export default function App() {
             className={`canvas-viewport ${panMode ? "pan-mode" : ""}`}
             ref={viewport}
             onPointerDown={(e) => {
-              if (panMode && e.pointerType === "mouse" && viewport.current) {
+              if (
+                panMode &&
+                !panGrabRef.current &&
+                e.pointerType === "mouse" &&
+                viewport.current
+              ) {
                 mousePan.current = {
                   x: e.clientX,
                   y: e.clientY,
@@ -1370,6 +1383,7 @@ export default function App() {
               } else if (
                 e.touches.length === 1 &&
                 panMode &&
+                !panGrabRef.current &&
                 viewport.current
               ) {
                 const [a] = Array.from(e.touches);
@@ -1395,7 +1409,12 @@ export default function App() {
                   touches[1].clientX,
                   touches[1].clientY,
                 );
-              } else if (touches.length === 1 && panMode && viewport.current) {
+              } else if (
+                touches.length === 1 &&
+                panMode &&
+                !panGrabRef.current &&
+                viewport.current
+              ) {
                 const g = gesture.current;
                 if (!g) return;
                 viewport.current.scrollLeft =
@@ -1489,6 +1508,7 @@ export default function App() {
                       panMode={panMode}
                       defer={deferArtboards}
                       fontEpoch={fontEpoch}
+                      panGrabRef={panGrabRef}
                     />
                   </div>
                   <div className="artboard-caption">
@@ -1519,8 +1539,19 @@ export default function App() {
           </div>
           <div className="canvas-bottom">
             <div className="canvas-hint">
-              <span className="keycap">⇧</span>
-              <span>Hold shift to select multiple objects</span>
+              {panMode ? (
+                <>
+                  <span className="keycap">✋</span>
+                  <span>
+                    Drag an object to move it freely · drag the canvas to pan
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="keycap">⇧</span>
+                  <span>Hold shift to select multiple objects</span>
+                </>
+              )}
             </div>
             <div className="zoom-control">
               <IconButton
@@ -1970,6 +2001,7 @@ export default function App() {
               register={noop}
               grid={false}
               preview
+              panGrabRef={panGrabRef}
             />
             <IconButton
               label="Next page"
