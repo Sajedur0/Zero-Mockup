@@ -29,7 +29,7 @@ Deploy the generated `dist/` directory to any static hosting provider. All fonts
 1. Start with the editable **Bloom** demo or choose **New project** from the project menu.
 2. Pick a template, or add text, a frame, shapes, icons and uploaded artwork from the tool rail.
 3. Use **Frames → Upload a screenshot** to replace a device's screen. Select a particular device first when a page contains several frames.
-4. Select objects on the canvas to edit their properties. Double-click text to focus its text editor. Hold Shift, draw a selection rectangle, or enable Select mode to select multiple objects.
+4. Select objects on the canvas to edit their properties — every field, including **Position & size** and text size, is applied to the canvas as you type or drag, and undo treats one burst of typing as a single step. Double-click text to focus its text editor. Hold Shift, draw a selection rectangle, or enable Select mode to select multiple objects.
 5. Adjust the background and page dimensions when no object is selected.
 6. Use **Export** for a single PNG/JPG or a ZIP of every page. **Save project** downloads editable JSON, including uploaded images and the brand kit.
 
@@ -43,6 +43,7 @@ On mobile, **Tools** opens a bottom sheet with horizontally scrollable tool cate
 - Unicode text, bundled Google font families including **Noto Sans Bengali**, size/style/color/alignment, spacing, line height, outline/shadow and explicit auto-fit.
 - Rectangle, circle, line, arrow, star, sparkle, blob, text badges, image/logo uploads and a lazily loaded searchable Lucide icon library.
 - Layer selection and rename (double-click), visibility/lock, four stacking operations, grouping/ungrouping.
+- Instant property editing: numbers (position, size, text size, spacing, outline), sliders, colors, alignment and names update the canvas on each keystroke or drag, and a gesture collapses into one undo entry.
 - Drag, resize and rotate handles; group transforms; box/Shift/Select-mode selection; center snapping guides; page alignment and three-object distribution; copy/paste, duplicate, delete and keyboard nudging.
 - Exact-canvas-size PNG and maximum-quality JPG; optional transparent PNG; all-pages ZIP export. Editor guides and selection handles are excluded from exports.
 - Browser autosave, editable JSON save/import with validation, a 70-step undo/redo history, brand colors/font, dark/light theme and a UI-free page preview.
@@ -87,6 +88,7 @@ Copy/paste is a private editor clipboard and does not read the system clipboard.
 - `src/perspective.ts` — camera projection and cached device texture warping.
 - `src/Library.tsx` / `src/IconLibrary.tsx` — template, text, device, asset, icon, brand and layer libraries.
 - `src/Inspector.tsx` / `src/ui.tsx` — property controls and accessible modal primitives.
+- `src/fields.ts` — the typing rules behind the live numeric property fields.
 - `src/model.ts` — serializable document schema, import validation, presets and original demo artwork.
 - `src/useProject.ts` — undo/redo and local persistence.
 - `src/fonts.css` / `src/styles.css` — bundled fonts, responsive layouts and themes.

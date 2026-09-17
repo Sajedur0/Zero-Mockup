@@ -289,6 +289,91 @@ test("resize handles update size and preserve undo", async ({ page }) => {
   await expect(page.getByLabel("W", { exact: true })).toHaveValue("900");
 });
 
+test("property fields update the canvas while they are still focused", async ({
+  page,
+}) => {
+  const b = await page.locator(".artboard-canvas").first().boundingBox();
+  if (!b) throw Error("Missing canvas");
+  const s = b.width / 1080;
+  await page.mouse.click(b.x + 200 * s, b.y + 260 * s);
+  await expect(page.getByLabel("Layer name")).toHaveValue("Headline");
+
+  /** A cheap fingerprint of what the artboard actually painted. */
+  const painted = () =>
+    page
+      .locator(".artboard-item.is-active canvas")
+      .first()
+      .evaluate((el) => {
+        const canvas = el as HTMLCanvasElement;
+        const { data } = canvas
+          .getContext("2d")!
+          .getImageData(0, 0, canvas.width, canvas.height);
+        let digest = 0;
+        for (let i = 0; i < data.length; i += 53)
+          digest = (digest * 33 + data[i]) | 0;
+        return digest;
+      });
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+  const before = await painted();
+
+  // Text size, typed and deliberately never blurred, tabbed away from or
+  // confirmed with Enter.
+  const size = page.getByLabel("Size", { exact: true });
+  await size.fill("84");
+  await expect(size).toBeFocused();
+  await expect
+    .poll(painted, { message: "the artboard repaints while typing" })
+    .not.toBe(before);
+
+  const resized = await painted();
+  // Position & size behave the same way: the object is already moved.
+  const x = page.getByLabel("X", { exact: true });
+  const startX = Number(await x.inputValue());
+  await x.fill(String(startX + 40));
+  await expect(x).toBeFocused();
+  await expect
+    .poll(painted, { message: "the object moves while typing" })
+    .not.toBe(resized);
+
+  // The project is updated too, still without the X field losing focus.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const saved = JSON.parse(
+          localStorage.getItem("zero-mockup-project-v1") || "null",
+        );
+        const headline = saved?.pages?.[0]?.objects?.find(
+          (o: { name: string }) => o.name === "Headline",
+        );
+        return [headline?.fontSize, headline?.x];
+      }),
+    )
+    .toEqual([84, startX + 40]);
+  await expect(x).toBeFocused();
+});
+
+test("a burst of typing in one property is a single undo step", async ({
+  page,
+}) => {
+  const b = await page.locator(".artboard-canvas").first().boundingBox();
+  if (!b) throw Error("Missing canvas");
+  const s = b.width / 1080;
+  await page.mouse.click(b.x + 200 * s, b.y + 260 * s);
+  const width = page.getByLabel("W", { exact: true });
+  await expect(width).toHaveValue("900");
+
+  await width.press("Control+a");
+  await page.keyboard.type("612", { delay: 40 });
+  await expect(width).toHaveValue("612");
+  await page.keyboard.press("Tab");
+  await page
+    .getByRole("button", { name: "Undo (Ctrl+Z)", exact: true })
+    .click();
+  await expect(width).toHaveValue("900");
+});
+
 test("grouping moves multiple layers together and can be undone", async ({
   page,
 }) => {

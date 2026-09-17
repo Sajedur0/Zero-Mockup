@@ -355,7 +355,7 @@ export default function App() {
     [],
   );
   const patchPage = useCallback(
-    (patch: Partial<Page>, label = "Page updated") =>
+    (patch: Partial<Page>, label = "Page updated", merge = false) =>
       update(
         (p) => ({
           ...p,
@@ -364,11 +364,12 @@ export default function App() {
           ),
         }),
         label,
+        merge,
       ),
     [update, page.id],
   );
   const patchObjects = useCallback(
-    (patch: Partial<DesignObject>, label = "Object updated") =>
+    (patch: Partial<DesignObject>, label = "Object updated", merge = false) =>
       patchPage(
         {
           objects: page.objects.map((o) =>
@@ -376,6 +377,7 @@ export default function App() {
           ),
         },
         label,
+        merge,
       ),
     [page.objects, selected, patchPage],
   );
@@ -1022,12 +1024,13 @@ export default function App() {
     apply: applyTemplate,
     add: addObject,
     upload,
-    patch: (id: string, p: Partial<DesignObject>) =>
+    patch: (id: string, p: Partial<DesignObject>, merge = false) =>
       patchPage(
         {
           objects: page.objects.map((o) => (o.id === id ? { ...o, ...p } : o)),
         },
         "Layer updated",
+        merge,
       ),
     updateBrand: (brand: Project["brand"]) =>
       update((p) => ({ ...p, brand }), "Brand kit updated"),
@@ -1240,9 +1243,7 @@ export default function App() {
             onClick={() => {
               setPanMode(true);
               // The hint line is hidden on phones, so say it out loud once.
-              notify(
-                "Pan tool: drag anywhere to move the workspace.",
-              );
+              notify("Pan tool: drag anywhere to move the workspace.");
             }}
           >
             <Hand size={17} />
@@ -1603,10 +1604,7 @@ export default function App() {
               {panMode ? (
                 <>
                   <span className="keycap">✋</span>
-                  <span>
-                    Drag anywhere to move the workspace
-                    selection
-                  </span>
+                  <span>Drag anywhere to move the workspace selection</span>
                 </>
               ) : (
                 <>
@@ -2118,8 +2116,8 @@ export default function App() {
           <p className="muted-note">
             On touchscreens, pinch to zoom and pan with two fingers. The pan
             tool moves the whole workspace (pages included) when you drag, and
-            the arrow keys nudge the selection. Enable Select mode
-            to choose multiple objects.
+            the arrow keys nudge the selection. Enable Select mode to choose
+            multiple objects.
           </p>
         </Modal>
       )}

@@ -6,6 +6,11 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import {
+  commitFieldNumber,
+  formatFieldNumber,
+  liveFieldNumber,
+} from "./fields";
 export function IconButton({
   children,
   label,
@@ -76,17 +81,18 @@ export function NumberField({
   step?: number;
   suffix?: string;
 }) {
-  const [draft, setDraft] = useState(String(Math.round(value * 100) / 100));
-  useLayoutEffect(
-    () => setDraft(String(Math.round(value * 100) / 100)),
-    [value],
-  );
-  const commit = () => {
-    const next =
-      draft.trim() && Number.isFinite(Number(draft))
-        ? Math.min(max, Math.max(min, Number(draft)))
-        : value;
-    setDraft(String(next));
+  const [draft, setDraft] = useState(() => formatFieldNumber(value));
+  /**
+   * While the field has focus the draft is the source of truth, so a value
+   * coming back from the canvas — or a clamp that has not been applied yet —
+   * can never overwrite what is being typed.
+   */
+  const [editing, setEditing] = useState(false);
+  const escapeRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!editing) setDraft(formatFieldNumber(value));
+  }, [value, editing]);
+  const apply = (next: number) => {
     if (next !== value) onChange(next);
   };
   return (
@@ -99,10 +105,38 @@ export function NumberField({
         max={max}
         step={step}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
+        onFocus={() => setEditing(true)}
+        onChange={(e) => {
+          const text = e.target.value;
+          setDraft(text);
+          // Live update: every keystroke and every spinner click that already
+          // reads as a usable number is applied to the object straight away.
+          // Out-of-range text waits for the blur so "150" can be typed into a
+          // field whose minimum is 20.
+          const live = liveFieldNumber(text, min, max);
+          if (live !== undefined) apply(live);
+        }}
+        onBlur={() => {
+          setEditing(false);
+          if (escapeRef.current) {
+            escapeRef.current = false;
+            setDraft(formatFieldNumber(value));
+            return;
+          }
+          const next = commitFieldNumber(draft, value, min, max);
+          setDraft(formatFieldNumber(next));
+          apply(next);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter") e.currentTarget.blur();
+          // Escape leaves without committing what has not been applied yet —
+          // an unfinished or out-of-range value — and shows the number the
+          // object actually has.
+          else if (e.key === "Escape") {
+            escapeRef.current = true;
+            setDraft(formatFieldNumber(value));
+            e.currentTarget.blur();
+          }
         }}
       />
       {suffix && <em>{suffix}</em>}

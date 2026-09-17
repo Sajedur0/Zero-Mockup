@@ -34,8 +34,12 @@ import { stableProps } from "./perf";
 export type InspectorProps = {
   page: Page;
   selected: DesignObject[];
-  patchPage: (p: Partial<Page>, label?: string) => void;
-  patchObjects: (p: Partial<DesignObject>, label?: string) => void;
+  patchPage: (p: Partial<Page>, label?: string, merge?: boolean) => void;
+  patchObjects: (
+    p: Partial<DesignObject>,
+    label?: string,
+    merge?: boolean,
+  ) => void;
   upload: (target: "screenshot" | "background" | "image") => void;
   remove: () => void;
   duplicate: () => void;
@@ -61,8 +65,18 @@ function Inspector({
 }: InspectorProps) {
   const o = selected.length === 1 ? selected[0] : undefined;
   const b = page.background;
+  /**
+   * Property edits are continuous gestures — typing digits, stepping a number
+   * field, dragging a slider, typing a name — so every keystroke reaches the
+   * canvas right away, while `merge` folds the burst into one undo step
+   * instead of one entry per character.
+   */
+  const setObject = (p: Partial<DesignObject>, label = "Object updated") =>
+    patchObjects(p, label, true);
+  const setPage = (p: Partial<Page>, label = "Page updated") =>
+    patchPage(p, label, true);
   const bg = (p: Partial<Background>) =>
-    patchPage({ background: { ...b, ...p } }, "Background updated");
+    setPage({ background: { ...b, ...p } }, "Background updated");
   const text = o?.kind === "text";
   return (
     <aside className="inspector">
@@ -98,7 +112,7 @@ function Inspector({
                 onChange={(e) => {
                   const p = presets[Number(e.target.value)];
                   if (p)
-                    patchPage(
+                    setPage(
                       { width: p.width, height: p.height },
                       "Canvas resized",
                     );
@@ -116,7 +130,7 @@ function Inspector({
                   label="W"
                   value={page.width}
                   onChange={(v) =>
-                    patchPage({ width: Math.round(v) }, "Canvas resized")
+                    setPage({ width: Math.round(v) }, "Canvas resized")
                   }
                   min={100}
                   max={8000}
@@ -127,7 +141,7 @@ function Inspector({
                   label="H"
                   value={page.height}
                   onChange={(v) =>
-                    patchPage({ height: Math.round(v) }, "Canvas resized")
+                    setPage({ height: Math.round(v) }, "Canvas resized")
                   }
                   min={100}
                   max={8000}
@@ -377,7 +391,7 @@ function Inspector({
                 id="page-name"
                 value={page.name}
                 onChange={(e) =>
-                  patchPage({ name: e.target.value }, "Page renamed")
+                  setPage({ name: e.target.value }, "Page renamed")
                 }
               />
               <p className="muted-note">
@@ -401,7 +415,7 @@ function Inspector({
                   aria-label="Layer name"
                   value={o.name}
                   onChange={(e) =>
-                    patchObjects({ name: e.target.value }, "Layer renamed")
+                    setObject({ name: e.target.value }, "Layer renamed")
                   }
                 />
               </Section>
@@ -450,12 +464,12 @@ function Inspector({
                   <NumberField
                     label="X"
                     value={o.x}
-                    onChange={(x) => patchObjects({ x })}
+                    onChange={(x) => setObject({ x })}
                   />
                   <NumberField
                     label="Y"
                     value={o.y}
-                    onChange={(y) => patchObjects({ y })}
+                    onChange={(y) => setObject({ y })}
                   />
                 </div>
                 <div className="field-row">
@@ -463,13 +477,13 @@ function Inspector({
                     label="W"
                     value={o.width}
                     min={20}
-                    onChange={(width) => patchObjects({ width })}
+                    onChange={(width) => setObject({ width })}
                   />
                   <NumberField
                     label="H"
                     value={o.height}
                     min={20}
-                    onChange={(height) => patchObjects({ height })}
+                    onChange={(height) => setObject({ height })}
                   />
                 </div>
                 <div className="field-row">
@@ -479,7 +493,7 @@ function Inspector({
                     min={-360}
                     max={360}
                     suffix="°"
-                    onChange={(rotation) => patchObjects({ rotation })}
+                    onChange={(rotation) => setObject({ rotation })}
                   />
                   <NumberField
                     label="Opacity"
@@ -487,7 +501,7 @@ function Inspector({
                     min={0}
                     max={100}
                     suffix="%"
-                    onChange={(v) => patchObjects({ opacity: v / 100 })}
+                    onChange={(v) => setObject({ opacity: v / 100 })}
                   />
                 </div>
               </Section>
@@ -499,14 +513,14 @@ function Inspector({
                   className="text-input text-editor"
                   value={o.text}
                   onChange={(e) =>
-                    patchObjects({ text: e.target.value }, "Text edited")
+                    setObject({ text: e.target.value }, "Text edited")
                   }
                 />
                 <select
                   className="full-select"
                   aria-label="Font family"
                   value={o.fontFamily}
-                  onChange={(e) => patchObjects({ fontFamily: e.target.value })}
+                  onChange={(e) => setObject({ fontFamily: e.target.value })}
                 >
                   {[
                     "Manrope",
@@ -525,15 +539,13 @@ function Inspector({
                     min={8}
                     max={700}
                     value={o.fontSize || 60}
-                    onChange={(fontSize) => patchObjects({ fontSize })}
+                    onChange={(fontSize) => setObject({ fontSize })}
                   />
                   <select
                     aria-label="Font weight"
                     className="full-select"
                     value={o.fontWeight}
-                    onChange={(e) =>
-                      patchObjects({ fontWeight: e.target.value })
-                    }
+                    onChange={(e) => setObject({ fontWeight: e.target.value })}
                   >
                     <option value="normal">Regular</option>
                     <option value="bold">Bold</option>
@@ -543,7 +555,7 @@ function Inspector({
                 </div>
                 <ColorField
                   value={o.fill}
-                  onChange={(fill) => patchObjects({ fill })}
+                  onChange={(fill) => setObject({ fill })}
                 />
                 <div className="segmented">
                   {(["left", "center", "right"] as const).map((a, i) => (
@@ -551,7 +563,7 @@ function Inspector({
                       key={a}
                       aria-label={"Text align " + a}
                       className={o.align === a ? "selected" : ""}
-                      onClick={() => patchObjects({ align: a })}
+                      onClick={() => setObject({ align: a })}
                     >
                       {i === 0 ? (
                         <AlignLeft size={16} />
@@ -569,9 +581,7 @@ function Inspector({
                     value={o.letterSpacing || 0}
                     min={-20}
                     max={100}
-                    onChange={(letterSpacing) =>
-                      patchObjects({ letterSpacing })
-                    }
+                    onChange={(letterSpacing) => setObject({ letterSpacing })}
                   />
                   <NumberField
                     label="Line"
@@ -579,7 +589,7 @@ function Inspector({
                     min={0.5}
                     max={3}
                     step={0.1}
-                    onChange={(lineHeight) => patchObjects({ lineHeight })}
+                    onChange={(lineHeight) => setObject({ lineHeight })}
                   />
                 </div>
                 <button
@@ -587,7 +597,7 @@ function Inspector({
                   onClick={() => {
                     const lines = (o.text || "").split("\n");
                     const maxLine = Math.max(...lines.map((l) => l.length), 1);
-                    patchObjects(
+                    setObject(
                       {
                         fontSize: Math.floor(
                           Math.min(
@@ -609,13 +619,13 @@ function Inspector({
                   max={15}
                   suffix="px"
                   onChange={(strokeWidth) =>
-                    patchObjects({ strokeWidth, stroke: o.stroke || "#ffffff" })
+                    setObject({ strokeWidth, stroke: o.stroke || "#ffffff" })
                   }
                 />
                 {!!o.strokeWidth && (
                   <ColorField
                     value={o.stroke || "#ffffff"}
-                    onChange={(stroke) => patchObjects({ stroke })}
+                    onChange={(stroke) => setObject({ stroke })}
                   />
                 )}
               </Section>
@@ -634,7 +644,7 @@ function Inspector({
                   aria-label="Device style"
                   value={o.frame}
                   onChange={(e) =>
-                    patchObjects({
+                    setObject({
                       frame: e.target.value as DesignObject["frame"],
                     })
                   }
@@ -646,7 +656,7 @@ function Inspector({
                 <ColorField
                   label="Frame color"
                   value={o.fill}
-                  onChange={(fill) => patchObjects({ fill })}
+                  onChange={(fill) => setObject({ fill })}
                 />
                 <RangeField
                   label="3D perspective tilt"
@@ -654,7 +664,7 @@ function Inspector({
                   min={-35}
                   max={35}
                   suffix="°"
-                  onChange={(tilt) => patchObjects({ tilt })}
+                  onChange={(tilt) => setObject({ tilt })}
                 />
               </Section>
             )}
@@ -662,7 +672,7 @@ function Inspector({
               <Section title="Appearance">
                 <ColorField
                   value={o.fill}
-                  onChange={(fill) => patchObjects({ fill })}
+                  onChange={(fill) => setObject({ fill })}
                 />
                 <NumberField
                   label="Stroke"
@@ -670,13 +680,13 @@ function Inspector({
                   min={0}
                   max={80}
                   onChange={(strokeWidth) =>
-                    patchObjects({ strokeWidth, stroke: o.stroke || "#254e3b" })
+                    setObject({ strokeWidth, stroke: o.stroke || "#254e3b" })
                   }
                 />
                 {!!o.strokeWidth && (
                   <ColorField
                     value={o.stroke || "#254e3b"}
-                    onChange={(stroke) => patchObjects({ stroke })}
+                    onChange={(stroke) => setObject({ stroke })}
                   />
                 )}
               </Section>
@@ -688,7 +698,7 @@ function Inspector({
                   value={o.shadow || 0}
                   max={100}
                   suffix="px"
-                  onChange={(shadow) => patchObjects({ shadow })}
+                  onChange={(shadow) => setObject({ shadow })}
                 />
                 {o.kind !== "text" && (
                   <RangeField
@@ -696,7 +706,7 @@ function Inspector({
                     value={o.radius || 0}
                     max={150}
                     suffix="px"
-                    onChange={(radius) => patchObjects({ radius })}
+                    onChange={(radius) => setObject({ radius })}
                   />
                 )}
               </Section>
@@ -708,21 +718,21 @@ function Inspector({
                   value={(o.brightness || 0) * 100}
                   min={-50}
                   max={50}
-                  onChange={(v) => patchObjects({ brightness: v / 100 })}
+                  onChange={(v) => setObject({ brightness: v / 100 })}
                 />
                 <RangeField
                   label="Contrast"
                   value={o.contrast || 0}
                   min={-50}
                   max={50}
-                  onChange={(contrast) => patchObjects({ contrast })}
+                  onChange={(contrast) => setObject({ contrast })}
                 />
                 <RangeField
                   label="Saturation"
                   value={(o.saturation || 0) * 100}
                   min={-100}
                   max={100}
-                  onChange={(v) => patchObjects({ saturation: v / 100 })}
+                  onChange={(v) => setObject({ saturation: v / 100 })}
                 />
               </Section>
             )}
