@@ -1241,7 +1241,7 @@ export default function App() {
               setPanMode(true);
               // The hint line is hidden on phones, so say it out loud once.
               notify(
-                "Pan tool: drag anywhere to move the workspace. The arrow pad nudges the selection.",
+                "Pan tool: drag anywhere to move the workspace.",
               );
             }}
           >
@@ -1604,7 +1604,7 @@ export default function App() {
                 <>
                   <span className="keycap">✋</span>
                   <span>
-                    Drag anywhere to move the workspace · arrow pad nudges the
+                    Drag anywhere to move the workspace
                     selection
                   </span>
                 </>
@@ -2118,7 +2118,7 @@ export default function App() {
           <p className="muted-note">
             On touchscreens, pinch to zoom and pan with two fingers. The pan
             tool moves the whole workspace (pages included) when you drag, and
-            the arrow pad or arrow keys nudge the selection. Enable Select mode
+            the arrow keys nudge the selection. Enable Select mode
             to choose multiple objects.
           </p>
         </Modal>
