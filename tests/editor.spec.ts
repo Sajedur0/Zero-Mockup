@@ -377,3 +377,46 @@ test("device screenshot replacement and JPG export", async ({ page }) => {
   }, bytes.toString("base64"));
   expect(size).toEqual([1080, 1920]);
 });
+
+test("page tabs open a hold menu and the last page becomes a blank page", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(300);
+  const tabs = page.locator(".page-tabs > button:not(.icon-button)");
+  await expect(tabs).toHaveCount(3);
+
+  const pressAndHold = async (index: number) => {
+    const tab = tabs.nth(index);
+    await tab.scrollIntoViewIfNeeded();
+    const box = (await tab.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(700);
+    await page.mouse.up();
+    const menu = page.locator(".page-tap-menu");
+    await expect(menu).toBeVisible();
+    return menu;
+  };
+
+  // Holding a tab must not also select it.
+  await expect(tabs.nth(0)).toHaveClass(/active/);
+  const menu = await pressAndHold(1);
+  await expect(tabs.nth(0)).toHaveClass(/active/);
+  await menu.getByRole("button", { name: "Duplicate page" }).click();
+  await expect(tabs).toHaveCount(4);
+
+  // Delete every page: the last one is replaced by a blank page.
+  for (const count of [3, 2, 1, 1]) {
+    const held = await pressAndHold(0);
+    await held.getByRole("button", { name: "Delete page" }).click();
+    await expect(tabs).toHaveCount(count);
+  }
+  await expect(tabs).toHaveAttribute("aria-label", /Blank page/);
+  await expect(tabs).toHaveClass(/active/);
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("zero-mockup-project-v1")!),
+  );
+  expect(saved.pages).toHaveLength(1);
+  expect(saved.pages[0].objects).toEqual([]);
+});

@@ -952,6 +952,10 @@ h3 {
   white-space: nowrap;
   color: #96a087;
   min-height: 35px;
+  /* Tabs open a menu on press-and-hold, so keep the browser's own long-press
+     selection callout out of the way. */
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 .page-tabs > button.active {
   background: #edf1e6;
@@ -1828,6 +1832,20 @@ h3 {
   right: 0;
   top: 23px;
   width: 180px;
+}
+/* Press-and-hold menu for the page tabs. Anchored to the bottom strip, so it
+   opens upwards and is positioned in viewport coordinates. */
+.page-tap-menu {
+  position: fixed;
+  z-index: 210;
+  width: 186px;
+  animation: toast-in 0.14s ease-out;
+}
+.page-tap-menu .dropdown-label {
+  padding: 6px 9px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .page-dropdown > button {
   font-size: 10px;

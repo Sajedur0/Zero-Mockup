@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   baseObject,
+  blankPage,
   createProject,
   defaultBackground,
   demoScreen,
@@ -29,6 +30,15 @@ describe("project model", () => {
       p.pages = [makePage(i)];
       expect(isProject(p)).toBe(true);
     }
+  });
+  it("makes an empty, valid page that adds to a project", () => {
+    const p = createProject();
+    const fresh = blankPage();
+    expect(fresh.objects).toEqual([]);
+    expect(fresh.background.color).toBe("#f1f1ef");
+    expect(isProject({ ...p, pages: [fresh] })).toBe(true);
+    const sized = blankPage(1024, 500);
+    expect([sized.width, sized.height]).toEqual([1024, 500]);
   });
   it("duplicates page contents without sharing ids or background references", () => {
     const p = makePage();

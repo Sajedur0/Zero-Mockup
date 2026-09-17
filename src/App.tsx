@@ -55,6 +55,7 @@ import Konva from "konva";
 import { isHandheld, rafThrottle, requestFonts, type FontNeed } from "./perf";
 import {
   baseObject,
+  blankPage,
   createProject,
   defaultBackground,
   download,
@@ -129,6 +130,12 @@ export default function App() {
   const [fileMenu, setFileMenu] = useState(false);
   const [context, setContext] = useState<{ x: number; y: number } | null>(null);
   const [pageMenu, setPageMenu] = useState<string | null>(null);
+  /** Press-and-hold menu for the page tabs (the only page menu on phones). */
+  const [pageHoldMenu, setPageHoldMenu] = useState<{
+    id: string;
+    left: number;
+    bottom: number;
+  } | null>(null);
   const [exportFormat, setExportFormat] = useState<"png" | "jpeg">("png");
   const [exportScope, setExportScope] = useState("all");
   const [transparent, setTransparent] = useState(false);
@@ -372,6 +379,71 @@ export default function App() {
     setActiveId(id);
     setSelected([]);
   };
+  /**
+   * Press and hold a page tab to get Duplicate/Delete.
+   *
+   * A long press fires before the finger is lifted, so the click that follows
+   * has to be swallowed — otherwise it would select the page and close the
+   * menu it just opened.
+   */
+  const holdRef = useRef<{
+    x: number;
+    y: number;
+    timer: number;
+  } | null>(null);
+  const holdFired = useRef(false);
+  const cancelHold = () => {
+    if (holdRef.current) {
+      window.clearTimeout(holdRef.current.timer);
+      holdRef.current = null;
+    }
+  };
+  const openPageHoldMenu = (id: string, el: HTMLElement) => {
+    const rect = el.getBoundingClientRect();
+    const width = 186;
+    setPageHoldMenu({
+      id,
+      left: Math.max(
+        8,
+        Math.min(
+          rect.left + rect.width / 2 - width / 2,
+          window.innerWidth - width - 8,
+        ),
+      ),
+      // The strip sits at the bottom of the screen, so the menu opens upwards.
+      bottom: Math.max(8, window.innerHeight - rect.top + 8),
+    });
+    setPageMenu(null);
+    setContext(null);
+    navigator.vibrate?.(12);
+  };
+  const startHold = (
+    id: string,
+    el: HTMLElement,
+    clientX: number,
+    clientY: number,
+  ) => {
+    cancelHold();
+    // A press that never ends in a click (the finger slid off the tab) must
+    // not swallow the next real tap.
+    holdFired.current = false;
+    holdRef.current = {
+      x: clientX,
+      y: clientY,
+      timer: window.setTimeout(() => {
+        holdRef.current = null;
+        holdFired.current = true;
+        openPageHoldMenu(id, el);
+      }, 450),
+    };
+  };
+  const moveHold = (clientX: number, clientY: number) => {
+    const hold = holdRef.current;
+    if (!hold) return;
+    // A scroll or a swipe is not a hold.
+    if (Math.abs(clientX - hold.x) > 12 || Math.abs(clientY - hold.y) > 12)
+      cancelHold();
+  };
   const addObject = useCallback(
     (o: DesignObject) => {
       const object = {
@@ -484,14 +556,11 @@ export default function App() {
       notify("A project can contain up to 30 pages.");
       return;
     }
-    const next: Page = {
-      id: uid(),
-      name: `Untitled page ${project.pages.length + 1}`,
-      width: page.width,
-      height: page.height,
-      background: defaultBackground("#f1f1ef"),
-      objects: [],
-    };
+    const next = blankPage(
+      page.width,
+      page.height,
+      `Untitled page ${project.pages.length + 1}`,
+    );
     update((p) => ({ ...p, pages: [...p.pages, next] }), "Page added");
     selectPage(next.id);
     notify("A fresh page. Make it yours.");
@@ -516,16 +585,35 @@ export default function App() {
     selectPage(copy.id);
     setPageMenu(null);
   };
+  /**
+   * Deleting is always allowed: when the last page goes, a fresh blank page
+   * takes its place so the canvas is never left empty. Either way it is a
+   * single history entry, so undo brings the deleted page straight back.
+   */
   const deletePage = (id: string) => {
-    if (project.pages.length === 1) {
-      notify("Keep at least one page in your project.");
-      return;
+    const index = project.pages.findIndex((p) => p.id === id);
+    if (index < 0) return;
+    const remaining = project.pages.filter((item) => item.id !== id);
+    const wasActive = page.id === id;
+    if (remaining.length) {
+      update(
+        (p) => ({ ...p, pages: p.pages.filter((item) => item.id !== id) }),
+        "Page deleted",
+      );
+      // Keep the strip where it was: the page that took this slot.
+      if (wasActive)
+        selectPage((remaining[index] ?? remaining[remaining.length - 1]).id);
+    } else {
+      const fresh = blankPage(
+        project.pages[index].width,
+        project.pages[index].height,
+      );
+      update(() => ({ ...project, pages: [fresh] }), "Page deleted");
+      selectPage(fresh.id);
+      notify("Page deleted. A blank page is ready.");
     }
-    update(
-      (p) => ({ ...p, pages: p.pages.filter((p) => p.id !== id) }),
-      "Page deleted",
-    );
     setPageMenu(null);
+    setPageHoldMenu(null);
     setSelected([]);
   };
   const applyTemplate = (i: number) => {
@@ -750,6 +838,8 @@ export default function App() {
         setSelected([]);
         setModal(null);
         setContext(null);
+        setPageMenu(null);
+        setPageHoldMenu(null);
         setFileMenu(false);
         setMobilePanel(null);
         return;
@@ -866,10 +956,19 @@ export default function App() {
     const close = () => {
       setContext(null);
       setPageMenu(null);
+      setPageHoldMenu(null);
       setFileMenu(false);
     };
     window.addEventListener("click", close);
-    return () => window.removeEventListener("click", close);
+    // The menu is anchored to a tab, so scrolling or rotating the strip
+    // would leave it floating in the wrong place.
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
   }, []);
   const openTool = (id: Tool) => {
     setTool(id);
@@ -1457,8 +1556,31 @@ export default function App() {
               {project.pages.map((p, i) => (
                 <button
                   key={p.id}
-                  onClick={() => selectPage(p.id)}
+                  onClick={(e) => {
+                    if (holdFired.current) {
+                      // The long press already opened the menu.
+                      holdFired.current = false;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      return;
+                    }
+                    selectPage(p.id);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    openPageHoldMenu(p.id, e.currentTarget);
+                  }}
+                  onPointerDown={(e) => {
+                    // Secondary mouse buttons have their own menu (below).
+                    if (e.button !== 0) return;
+                    startHold(p.id, e.currentTarget, e.clientX, e.clientY);
+                  }}
+                  onPointerMove={(e) => moveHold(e.clientX, e.clientY)}
+                  onPointerUp={cancelHold}
+                  onPointerLeave={cancelHold}
+                  onPointerCancel={cancelHold}
                   className={p.id === page.id ? "active" : ""}
+                  aria-label={`Page ${i + 1}: ${p.name}`}
                 >
                   <span
                     className="page-tab-preview"
@@ -1576,6 +1698,36 @@ export default function App() {
             onClick={() => setToast("")}
           >
             <X size={14} />
+          </button>
+        </div>
+      )}
+      {pageHoldMenu && (
+        <div
+          className="dropdown page-tap-menu"
+          role="menu"
+          aria-label="Page options"
+          style={{ left: pageHoldMenu.left, bottom: pageHoldMenu.bottom }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span className="dropdown-label">
+            {project.pages.findIndex((p) => p.id === pageHoldMenu.id) + 1} ·{" "}
+            {project.pages.find((p) => p.id === pageHoldMenu.id)?.name}
+          </span>
+          <button
+            onClick={() => {
+              copyPage(pageHoldMenu.id);
+              setPageHoldMenu(null);
+            }}
+          >
+            <Copy size={14} />
+            Duplicate page
+          </button>
+          <button
+            className="danger"
+            onClick={() => deletePage(pageHoldMenu.id)}
+          >
+            <Trash2 size={14} />
+            Delete page
           </button>
         </div>
       )}

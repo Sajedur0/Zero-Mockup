@@ -283,6 +283,21 @@ export const createProject = (): Project => ({
     font: "Manrope",
   },
 });
+/** A fresh, empty page — what "+ Add page" and "delete the last page" create. */
+export function blankPage(
+  width = 1080,
+  height = 1920,
+  name = "Blank page",
+): Page {
+  return {
+    id: uid(),
+    name,
+    width,
+    height,
+    background: defaultBackground("#f1f1ef"),
+    objects: [],
+  };
+}
 export function duplicatePage(page: Page): Page {
   return {
     ...structuredClone(page),
