@@ -1,4 +1,13 @@
-import { lazy, memo, Suspense, useEffect, useState } from "react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   Search,
   ArrowUpRight,
@@ -33,6 +42,7 @@ import {
   type Page,
 } from "./model";
 import type { HistoryEntry } from "./useProject";
+import type { DropPlace } from "./layers";
 import { ColorField, IconButton } from "./ui";
 import { requestFonts, stableProps } from "./perf";
 const IconLibrary = lazy(() => import("./IconLibrary"));
@@ -55,6 +65,10 @@ export type LibraryProps = {
   add: (o: DesignObject) => void;
   upload: (target: "screenshot" | "background" | "image") => void;
   patch: (id: string, p: Partial<DesignObject>, merge?: boolean) => void;
+  /** Drag-and-drop restacking: place the block beside a row of the panel. */
+  reorderLayers: (moving: string[], anchor: string, place: DropPlace) => void;
+  /** Keyboard restacking: one row toward the front (`1`) or the back (`-1`). */
+  shiftLayers: (moving: string[], dir: 1 | -1) => void;
   updateBrand: (b: Project["brand"]) => void;
   history: HistoryEntry[];
   historyIndex: number;
@@ -114,6 +128,8 @@ function Library({
   upload,
   patch,
   updateBrand,
+  reorderLayers,
+  shiftLayers,
   history,
   historyIndex,
   restore,
@@ -125,6 +141,146 @@ function Library({
   const [elementsTab, setElementsTab] = useState("Shapes");
   const [brandColor, setBrandColor] = useState("#e87b53");
   const [editingLayer, setEditingLayer] = useState<string | null>(null);
+  /**
+   * Restacking the list by hand. The rows are already stacked in the panel, so
+   * a drag simply reports which row the pointer is sitting on and the page
+   * reorders itself — the list, the canvas and the undo history all follow.
+   *
+   * A gesture lives in a ref because pointermove fires far too often for
+   * state; `dragged` is only the ids in flight, which is all the CSS needs.
+   */
+  const layerDrag = useRef<{
+    pointerId: number;
+    moving: string[];
+    startY: number;
+    started: boolean;
+  } | null>(null);
+  const [dragged, setDragged] = useState<string[] | null>(null);
+  const dragActive = !!dragged;
+  const layerRows = useRef<HTMLDivElement>(null);
+  /**
+   * The click a finished drag leaves behind would select whichever row ended
+   * up under the pointer, so it is swallowed and the moved block is selected.
+   */
+  const swallowRowClick = useRef(false);
+  /** The rows that travel together: the grabbed one plus its selection. */
+  const layerBlock = (id: string) =>
+    selected.length > 1 && selected.includes(id) ? [...selected] : [id];
+  /** A listbox is one tab stop: the arrows then walk the rows. */
+  const layerTabStop = selected[0] ?? page.objects.at(-1)?.id;
+  /**
+   * Which row the pointer is over and which half it sits in. Rows are measured
+   * on every move because a live reorder moves them out from under the cursor.
+   */
+  const rowUnder = (y: number) => {
+    const rows = Array.from(
+      layerRows.current?.querySelectorAll<HTMLElement>(".layer-item") ?? [],
+    );
+    if (!rows.length) return null;
+    const id = (row: HTMLElement) => row.dataset.layerId ?? "";
+    const box = rows[0].getBoundingClientRect();
+    if (y < box.top)
+      return { anchor: id(rows[0]), place: "above" as DropPlace };
+    const end = rows[rows.length - 1].getBoundingClientRect();
+    if (y > end.bottom)
+      return { anchor: id(rows[rows.length - 1]), place: "below" as DropPlace };
+    for (const row of rows) {
+      const r = row.getBoundingClientRect();
+      if (y < r.bottom)
+        return {
+          anchor: id(row),
+          place: (y < r.top + r.height / 2 ? "above" : "below") as DropPlace,
+        };
+    }
+    return null;
+  };
+  const beginLayerDrag = (e: ReactPointerEvent<HTMLDivElement>, id: string) => {
+    if (e.button !== 0 || layerDrag.current) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("button, input")) return;
+    // A finger on the list has to keep scrolling it, so a touch drag starts at
+    // the grip; a mouse can grab the whole row.
+    if (e.pointerType !== "mouse" && !target.closest(".layer-grip")) return;
+    const row = e.currentTarget;
+    layerDrag.current = {
+      pointerId: e.pointerId,
+      moving: layerBlock(id),
+      startY: e.clientY,
+      started: false,
+    };
+    row.setPointerCapture(e.pointerId);
+  };
+  const dragLayer = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = layerDrag.current;
+    if (!gesture || gesture.pointerId !== e.pointerId) return;
+    if (!gesture.started) {
+      // A few pixels of travel is still a click; a row has to be pulled.
+      if (Math.abs(e.clientY - gesture.startY) < 4) return;
+      gesture.started = true;
+      setDragged(gesture.moving);
+    }
+    // A long list has to move under a pointer that reached the panel's edge,
+    // otherwise its first and last rows are out of reach.
+    const scroll = layerRows.current?.closest<HTMLElement>(".library-scroll");
+    if (scroll) {
+      const box = scroll.getBoundingClientRect();
+      const near =
+        e.clientY - box.top < 28 ? -1 : e.clientY - box.bottom > -28 ? 1 : 0;
+      if (near) scroll.scrollTop += near * 20;
+    }
+    const drop = rowUnder(e.clientY);
+    if (drop) reorderLayers(gesture.moving, drop.anchor, drop.place);
+  };
+  const endLayerDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = layerDrag.current;
+    if (!gesture || gesture.pointerId !== e.pointerId) return;
+    layerDrag.current = null;
+    setDragged(null);
+    if (!gesture.started) return;
+    select(gesture.moving);
+    swallowRowClick.current = true;
+    // No click follows a release outside the list, so the flag expires alone.
+    window.setTimeout(() => (swallowRowClick.current = false), 200);
+  };
+  /**
+   * Keyboard versions of the same moves: ↑ / ↓ walk the list the way the panel
+   * reads it, Alt + ↑ / ↓ restacks the row, and Enter selects it.
+   */
+  const layerKeys = (e: ReactKeyEvent<HTMLDivElement>, id: string) => {
+    if ((e.target as HTMLElement).tagName === "INPUT") return;
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      // The editor nudges the selected object with the arrow keys; inside the
+      // panel they belong to the list instead.
+      e.stopPropagation();
+      shiftLayers(layerBlock(id), e.key === "ArrowUp" ? 1 : -1);
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      select([id]);
+      return;
+    }
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rows = Array.from(
+      layerRows.current?.querySelectorAll<HTMLElement>(".layer-item") ?? [],
+    );
+    const at = rows.findIndex((row) => row.dataset.layerId === id);
+    const next =
+      rows[
+        Math.max(
+          0,
+          Math.min(rows.length - 1, at + (e.key === "ArrowUp" ? -1 : 1)),
+        )
+      ];
+    if (!next) return;
+    next.focus();
+    const nextId = next.dataset.layerId;
+    if (nextId)
+      select(e.shiftKey ? [...new Set([...selected, nextId])] : [nextId]);
+  };
   // Playfair Display and Noto Sans Bengali are only fetched when the text
   // tools (which preview them) are actually opened.
   useEffect(() => {
@@ -665,19 +821,43 @@ function Library({
               <span>{page.name}</span>
               <span>{page.objects.length} layers</span>
             </div>
-            <div className="layer-list">
+            <div
+              ref={layerRows}
+              className={`layer-list ${dragActive ? "dragging" : ""}`}
+              role="listbox"
+              aria-label={"Layers on " + page.name}
+              aria-multiselectable="true"
+              onClickCapture={(e) => {
+                if (!swallowRowClick.current) return;
+                swallowRowClick.current = false;
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+            >
               {[...page.objects].reverse().map((o) => (
                 <div
                   key={o.id}
-                  className={`layer-item ${selected.includes(o.id) ? "selected" : ""} ${!o.visible ? "hidden-layer" : ""}`}
+                  data-layer-id={o.id}
+                  role="option"
+                  aria-selected={selected.includes(o.id)}
+                  aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                  tabIndex={o.id === layerTabStop ? 0 : -1}
+                  className={`layer-item ${selected.includes(o.id) ? "selected" : ""} ${!o.visible ? "hidden-layer" : ""} ${dragged?.includes(o.id) ? "dragging" : ""}`}
                   onDoubleClick={() => setEditingLayer(o.id)}
+                  onPointerDown={(e) => beginLayerDrag(e, o.id)}
+                  onPointerMove={dragLayer}
+                  onPointerUp={endLayerDrag}
+                  onPointerCancel={endLayerDrag}
+                  onKeyDown={(e) => layerKeys(e, o.id)}
                   onClick={(e) =>
                     select(
                       e.shiftKey ? [...new Set([...selected, o.id])] : [o.id],
                     )
                   }
                 >
-                  <GripVertical size={12} />
+                  <span className="layer-grip" aria-hidden="true">
+                    <GripVertical size={12} />
+                  </span>
                   <span className="layer-kind">
                     {o.kind === "text" ? (
                       <Type size={16} />
@@ -739,8 +919,9 @@ function Library({
               ))}
             </div>
             <p className="muted-note">
-              Shift-click to select multiple layers. Use the Arrange controls to
-              change their order.
+              Drag a row up or down to restack it — on a touchscreen, pull it by
+              its grip. Shift-click several layers to move them together, or
+              press Alt + ↑ / ↓ on a focused row.
             </p>
           </>
         )}

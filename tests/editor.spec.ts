@@ -103,6 +103,119 @@ test("text editing, duplicate, layers and keyboard nudge", async ({ page }) => {
   await expect(page.locator(".layer-item")).toHaveCount(7);
 });
 
+test("a layer is dragged up and down the stack, and one undo takes it back", async ({
+  page,
+}) => {
+  await page
+    .getByRole("button", { name: "Layers", exact: true })
+    .first()
+    .click();
+  const rows = page.locator(".layer-item");
+  await expect(rows).toHaveCount(6);
+  await expect(rows.first()).toContainText("Little sparkle");
+  const grabbed = await rows.first().boundingBox();
+  const landing = await rows.nth(2).boundingBox();
+  if (!grabbed || !landing) throw Error("Missing layer rows");
+  await page.mouse.move(
+    grabbed.x + grabbed.width / 2,
+    grabbed.y + grabbed.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    landing.x + landing.width / 2,
+    landing.y + landing.height * 0.75,
+    { steps: 12 },
+  );
+  await page.mouse.up();
+  await expect(rows.nth(2)).toContainText("Little sparkle");
+  await expect(rows.nth(0)).toContainText("App screenshot");
+  // The drag is still one gesture: the panel keeps the block selected.
+  await expect(page.getByLabel("Layer name")).toHaveValue("Little sparkle");
+  await page.waitForTimeout(700);
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(
+        localStorage.getItem("zero-mockup-project-v1")!,
+      ).pages[0].objects.map((o: { name: string }) => o.name),
+    ),
+  ).toEqual([
+    "Soft accent",
+    "Brand name",
+    "Headline",
+    "Little sparkle",
+    "Subheading",
+    "App screenshot",
+  ]);
+  // Rows crossed on the way down are a single undo step.
+  await page
+    .getByRole("button", { name: "Undo (Ctrl+Z)", exact: true })
+    .click();
+  await expect(rows.first()).toContainText("Little sparkle");
+});
+
+test("a dragged row carries the rest of the selection with it", async ({
+  page,
+}) => {
+  await page
+    .getByRole("button", { name: "Layers", exact: true })
+    .first()
+    .click();
+  const rows = page.locator(".layer-item");
+  await rows.nth(3).click();
+  await rows.nth(4).click({ modifiers: ["Shift"] });
+  await expect(
+    page.getByRole("heading", { name: "2 objects selected" }),
+  ).toBeVisible();
+  const grabbed = await rows.nth(3).boundingBox();
+  const landing = await rows.nth(5).boundingBox();
+  if (!grabbed || !landing) throw Error("Missing layer rows");
+  await page.mouse.move(
+    grabbed.x + grabbed.width / 2,
+    grabbed.y + grabbed.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    landing.x + landing.width / 2,
+    landing.y + landing.height * 0.75,
+    { steps: 12 },
+  );
+  await page.mouse.up();
+  // Both rows move as a block and neither is left behind at the drop point.
+  await expect(rows.nth(3)).toContainText("Soft accent");
+  await expect(rows.nth(4)).toContainText("Headline");
+  await expect(rows.nth(5)).toContainText("Brand name");
+  await expect(
+    page.getByRole("heading", { name: "2 objects selected" }),
+  ).toBeVisible();
+});
+
+test("Alt + arrows restack the row in focus without nudging the canvas", async ({
+  page,
+}) => {
+  await page
+    .getByRole("button", { name: "Layers", exact: true })
+    .first()
+    .click();
+  const rows = page.locator(".layer-item");
+  const brand = rows.filter({
+    has: page.getByText("Brand name", { exact: true }),
+  });
+  await brand.click();
+  await expect(rows.nth(4)).toContainText("Brand name");
+  await expect(page.getByLabel("X", { exact: true })).toHaveValue("100");
+  await page.keyboard.press("Alt+ArrowUp");
+  await expect(rows.nth(3)).toContainText("Brand name");
+  // Arrows inside the panel walk the list instead of nudging the object.
+  await expect(page.getByLabel("X", { exact: true })).toHaveValue("100");
+  for (let i = 0; i < 3; i++) await page.keyboard.press("Alt+ArrowUp");
+  await expect(rows.first()).toContainText("Brand name");
+  await page.keyboard.press("Alt+ArrowUp");
+  await expect(page.getByRole("status")).toContainText("already at the front");
+  await page.keyboard.press("ArrowDown");
+  await expect(rows.first()).toContainText("Brand name");
+  await expect(page.getByLabel("Layer name")).toHaveValue("Little sparkle");
+});
+
 test("canvas drag and handle resize persist correctly", async ({ page }) => {
   const bounds = await page.locator(".artboard-canvas").first().boundingBox();
   if (!bounds) throw Error("Missing canvas");

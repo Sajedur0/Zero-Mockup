@@ -1912,8 +1912,29 @@ h3 {
   background: #f5eee5;
   border-color: #e8d9c7;
 }
-.layer-item > svg {
+/* Restacking the panel by hand. Rows are grabbed with the pointer, fingers
+   have to take the grip so the list keeps scrolling. */
+.layer-grip {
   color: #c0c8b5;
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  padding: 0 5px;
+  cursor: grab;
+  touch-action: none;
+}
+.layer-list.dragging {
+  user-select: none;
+}
+.layer-item.dragging {
+  background: var(--hover);
+  border-color: var(--border);
+  box-shadow: 0 3px 10px #23311b1a;
+  cursor: grabbing;
+}
+.layer-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .layer-kind {
   color: #9cab8b;
@@ -3432,6 +3453,13 @@ h3 {
   }
   .frame-card {
     min-height: 120px;
+  }
+  /* The only touch target that restacks a row, so it gets a finger's width
+     and the whole height of the row. */
+  .layer-grip {
+    width: 34px;
+    padding: 0;
+    margin: -9px -4px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

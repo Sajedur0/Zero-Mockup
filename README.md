@@ -33,7 +33,7 @@ Deploy the generated `dist/` directory to any static hosting provider. All fonts
 5. Adjust the background and page dimensions when no object is selected. With a picture in the project, **Colours from your image** reads it and offers solid fills and ready-made gradients built from it.
 6. Use **Export** for a single PNG/JPG or a ZIP of every page. **Save project** downloads editable JSON, including uploaded images and the brand kit.
 
-On mobile, **Tools** opens a bottom sheet with horizontally scrollable tool categories. **Properties** edits the current page/selection, and **Layers** exposes objects that are difficult to tap on the canvas. Pinch to zoom; two fingers pan the canvas. Undo/redo remain available in the top toolbar.
+On mobile, **Tools** opens a bottom sheet with horizontally scrollable tool categories. **Properties** edits the current page/selection, and **Layers** exposes objects that are difficult to tap on the canvas and restacks them from their grips. Pinch to zoom; two fingers pan the canvas. Undo/redo remain available in the top toolbar.
 
 ## Implemented
 
@@ -43,7 +43,7 @@ On mobile, **Tools** opens a bottom sheet with horizontally scrollable tool cate
 - Android, iPhone-style and frameless devices; automatic cover-cropping of screenshots; frame colors, radius, rotation, shadow, and cached 3D Y-axis perspective projection.
 - Unicode text, bundled Google font families including **Noto Sans Bengali**, size/style/color/alignment, spacing, line height, outline/shadow and explicit auto-fit.
 - Rectangle, circle, line, arrow, star, sparkle, blob, text badges, image/logo uploads and a lazily loaded searchable Lucide icon library.
-- Layer selection and rename (double-click), visibility/lock, four stacking operations, grouping/ungrouping.
+- Layer selection and rename (double-click), visibility/lock, four stacking operations, grouping/ungrouping, and drag-and-drop restacking straight from the Layers panel: pull a row onto its new place and the canvas follows on every crossing. On a touchscreen a row is dragged by its grip so the list still scrolls, and Alt+↑ / Alt+↓ on a focused row does the same one step at a time.
 - Instant property editing: numbers (position, size, text size, spacing, outline), sliders, colors, alignment and names update the canvas on each keystroke or drag, and a gesture collapses into one undo entry.
 - Drag, resize and rotate handles; group transforms; box/Shift/Select-mode selection; center snapping guides; page alignment and three-object distribution; copy/paste, duplicate, delete and keyboard nudging.
 - Exact-canvas-size PNG and maximum-quality JPG; optional transparent PNG; all-pages ZIP export. Editor guides and selection handles are excluded from exports. Pages that are offscreen on phones are waited for before rendering, a canvas larger than the browser can rasterise is exported at the largest size that fits (never a silent blank file), and if the ZIP writer cannot be loaded each page is saved as its own file.
@@ -65,6 +65,7 @@ Use Command on macOS or Control on Windows/Linux.
 | Nudge / large nudge      | Arrow / Shift+Arrow             |
 | Zoom in / out / fit      | Ctrl+Plus / Ctrl+Minus / Ctrl+0 |
 | Select / pan tool        | V / H                           |
+| Layer up / down (panel)  | Alt+↑ / Alt+↓                   |
 | Save editable project    | Ctrl+S                          |
 | Search templates         | Ctrl+K                          |
 | Shortcut reference       | ?                               |
@@ -90,6 +91,7 @@ Copy/paste is a private editor clipboard and does not read the system clipboard.
 - `src/Library.tsx` / `src/IconLibrary.tsx` — template, text, device, asset, icon, brand and layer libraries.
 - `src/Inspector.tsx` / `src/ui.tsx` — property controls and accessible modal primitives.
 - `src/fields.ts` — the typing rules behind the live numeric property fields.
+- `src/layers.ts` — paint-order moves shared by the Layers panel and its keyboard shortcuts.
 - `src/model.ts` — serializable document schema, import validation, presets and original demo artwork.
 - `src/palette.ts` — colour sampling for uploaded pictures, from pixel histogram to solid swatches and gradients.
 - `src/export.ts` — rasterisation limits, file names and export error wording.

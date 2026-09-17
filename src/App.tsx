@@ -78,6 +78,7 @@ import {
   type Page,
   type Project,
 } from "./model";
+import { placeBlock, stepBlock, type DropPlace } from "./layers";
 import { useProject } from "./useProject";
 import {
   exportErrorReason,
@@ -581,6 +582,29 @@ export default function App() {
           [objects[i], objects[i - 1]] = [objects[i - 1], objects[i]];
     }
     patchPage({ objects }, "Layer order changed");
+  };
+  /**
+   * Restacking from the Layers panel. A drag reports every row it crosses, so
+   * the canvas follows the pointer, and one gesture folds into a single undo
+   * step. The keyboard asks for the same two moves one row at a time.
+   */
+  const reorderLayers = (moving: string[], anchor: string, place: DropPlace) =>
+    patchPage(
+      { objects: placeBlock(page.objects, moving, anchor, place) },
+      "Layers reordered",
+      true,
+    );
+  const shiftLayers = (moving: string[], dir: 1 | -1) => {
+    const objects = stepBlock(page.objects, moving, dir);
+    if (objects === page.objects) {
+      notify(
+        dir === 1
+          ? "That layer is already at the front."
+          : "That layer is already at the back.",
+      );
+      return;
+    }
+    patchPage({ objects }, "Layers reordered", true);
   };
   const group = () => {
     if (selected.length > 1) {
@@ -1116,6 +1140,8 @@ export default function App() {
       ),
     updateBrand: (brand: Project["brand"]) =>
       update((p) => ({ ...p, brand }), "Brand kit updated"),
+    reorderLayers,
+    shiftLayers,
     history,
     historyIndex,
     restore,
