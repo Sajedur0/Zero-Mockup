@@ -81,6 +81,45 @@ export const presets = [
   { name: "Feature Graphic", width: 1024, height: 500 },
   { name: "App Icon", width: 512, height: 512 },
 ];
+/** One-tap gradients for the page background. */
+export const gradients: {
+  name: string;
+  colors: string[];
+  type: "linear" | "radial";
+  angle: number;
+}[] = [
+  {
+    name: "Sage mist",
+    colors: ["#e7efdb", "#f7f8f5"],
+    type: "linear",
+    angle: 135,
+  },
+  {
+    name: "Warm blush",
+    colors: ["#f7e6db", "#f4c4aa"],
+    type: "linear",
+    angle: 120,
+  },
+  {
+    name: "Lilac haze",
+    colors: ["#ebe5f5", "#a79ad0"],
+    type: "linear",
+    angle: 160,
+  },
+  {
+    name: "Deep forest",
+    colors: ["#254e3b", "#0f1c16"],
+    type: "linear",
+    angle: 145,
+  },
+  { name: "Sunset", colors: ["#e87b53", "#f5eabf"], type: "linear", angle: 90 },
+  {
+    name: "Sky glow",
+    colors: ["#ddeaf3", "#ffffff"],
+    type: "radial",
+    angle: 0,
+  },
+];
 export const baseObject = (
   kind: ObjectKind,
   props: Partial<DesignObject> = {},
@@ -283,6 +322,21 @@ export const createProject = (): Project => ({
     font: "Manrope",
   },
 });
+/** A fresh, empty page — what "+ Add page" and "delete the last page" create. */
+export function blankPage(
+  width = 1080,
+  height = 1920,
+  name = "Blank page",
+): Page {
+  return {
+    id: uid(),
+    name,
+    width,
+    height,
+    background: defaultBackground("#f1f1ef"),
+    objects: [],
+  };
+}
 export function duplicatePage(page: Page): Page {
   return {
     ...structuredClone(page),

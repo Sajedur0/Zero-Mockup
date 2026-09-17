@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createProject, isProject, type Project } from "./model";
+import { onIdle, structurallyEqual } from "./perf";
 export type HistoryEntry = { project: Project; label: string };
 const STORAGE = "zero-mockup-project-v1";
 function initial() {
@@ -11,6 +12,7 @@ function initial() {
   }
   return createProject();
 }
+
 export function useProject() {
   const [history, setHistory] = useState<HistoryEntry[]>(() => [
     { project: initial(), label: "Project opened" },
@@ -22,15 +24,39 @@ export function useProject() {
   indexRef.current = index;
   historyRef.current = history;
   const project = history[index].project;
+  /**
+   * Applying an update returns the new project. `merge` folds the change into
+   * the previous history entry when it is the same kind of edit and arrives
+   * right after it — a burst of arrow-key nudges should undo as one step, not
+   * twenty.
+   */
+  const lastUpdateAt = useRef(0);
   const update = useCallback(
-    (fn: (p: Project) => Project, label = "Design updated") => {
+    (fn: (p: Project) => Project, label = "Design updated", merge = false) => {
       const old = historyRef.current[indexRef.current].project;
-      const next = fn(structuredClone(old));
-      if (JSON.stringify(old) === JSON.stringify(next)) return;
-      const entries = [
-        ...historyRef.current.slice(0, indexRef.current + 1),
-        { project: next, label },
-      ].slice(-70);
+      // Updates are immutable (`{ ...page, objects: [...] }`), so history
+      // entries share untouched branches instead of deep-cloning megabytes
+      // of base64 artwork 70 times over.
+      const next = fn(old);
+      if (next === old || structurallyEqual(old, next)) return;
+      const now = Date.now();
+      const canMerge =
+        merge &&
+        now - lastUpdateAt.current < 600 &&
+        indexRef.current === historyRef.current.length - 1 &&
+        historyRef.current[indexRef.current].label === label;
+      lastUpdateAt.current = now;
+      const entries = (
+        canMerge
+          ? [
+              ...historyRef.current.slice(0, indexRef.current),
+              { project: next, label },
+            ]
+          : [
+              ...historyRef.current.slice(0, indexRef.current + 1),
+              { project: next, label },
+            ]
+      ).slice(-70);
       historyRef.current = entries;
       indexRef.current = entries.length - 1;
       setHistory(entries);
@@ -53,14 +79,20 @@ export function useProject() {
       }
     };
     window.addEventListener("pagehide", saveOnExit);
-    const t = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE, JSON.stringify(project));
-        setSaveState("All changes saved");
-      } catch {
-        setSaveState("Storage full · save project file");
-      }
-    }, 600);
+    // Serialising the project blocks the main thread, so wait for a pause in
+    // typing/dragging and then write while the browser is idle.
+    const t = setTimeout(
+      () =>
+        onIdle(() => {
+          try {
+            localStorage.setItem(STORAGE, JSON.stringify(project));
+            setSaveState("All changes saved");
+          } catch {
+            setSaveState("Storage full · save project file");
+          }
+        }),
+      400,
+    );
     return () => {
       clearTimeout(t);
       window.removeEventListener("pagehide", saveOnExit);

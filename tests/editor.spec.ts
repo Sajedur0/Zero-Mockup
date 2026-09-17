@@ -47,7 +47,14 @@ test("background, custom dimensions, undo and redo", async ({ page }) => {
   await expect(page.getByLabel("Color hex", { exact: true })).toHaveValue(
     "#AACC99",
   );
+  // Background offers solid, gradient and image as picture tiles.
+  await expect(page.locator(".bg-types > button")).toHaveCount(3);
   await page.getByRole("button", { name: "Gradient", exact: true }).click();
+  // A ready-made gradient fills both stops and the angle.
+  await page.getByRole("button", { name: "Use gradient Lilac haze" }).click();
+  await expect(page.getByLabel("Stop 1 hex")).toHaveValue("#EBE5F5");
+  await expect(page.getByLabel("Stop 2 hex")).toHaveValue("#A79AD0");
+  await expect(page.getByLabel("Angle")).toHaveValue("160");
   await page.getByRole("button", { name: "Add color stop" }).click();
   await expect(page.getByLabel("Stop 3 hex")).toBeVisible();
   await page.getByLabel("W", { exact: true }).fill("1024");
@@ -376,4 +383,134 @@ test("device screenshot replacement and JPG export", async ({ page }) => {
     return [i.width, i.height];
   }, bytes.toString("base64"));
   expect(size).toEqual([1080, 1920]);
+});
+
+test("page tabs open a hold menu and the last page becomes a blank page", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(300);
+  const tabs = page.locator(".page-tabs > button:not(.icon-button)");
+  await expect(tabs).toHaveCount(3);
+
+  const pressAndHold = async (index: number) => {
+    const tab = tabs.nth(index);
+    await tab.scrollIntoViewIfNeeded();
+    const box = (await tab.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(700);
+    await page.mouse.up();
+    const menu = page.locator(".page-tap-menu");
+    await expect(menu).toBeVisible();
+    return menu;
+  };
+
+  // Holding a tab must not also select it.
+  await expect(tabs.nth(0)).toHaveClass(/active/);
+  const menu = await pressAndHold(1);
+  await expect(tabs.nth(0)).toHaveClass(/active/);
+  await menu.getByRole("button", { name: "Duplicate page" }).click();
+  await expect(tabs).toHaveCount(4);
+
+  // Delete every page: the last one is replaced by a blank page.
+  for (const count of [3, 2, 1, 1]) {
+    const held = await pressAndHold(0);
+    await held.getByRole("button", { name: "Delete page" }).click();
+    await expect(tabs).toHaveCount(count);
+  }
+  await expect(tabs).toHaveAttribute("aria-label", /Blank page/);
+  await expect(tabs).toHaveClass(/active/);
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("zero-mockup-project-v1")!),
+  );
+  expect(saved.pages).toHaveLength(1);
+  expect(saved.pages[0].objects).toEqual([]);
+});
+
+test("nothing is text-selectable except real fields", async ({ page }) => {
+  // The editor is a canvas app: pressing and holding must not select labels.
+  await page.locator(".page-tabs > button:not(.icon-button)").first().hover();
+  await page.mouse.down();
+  await page.mouse.move(320, 300, { steps: 6 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("");
+  expect(
+    await page.evaluate(() => getComputedStyle(document.body).userSelect),
+  ).toBe("none");
+
+  // Inputs and text areas still behave like text fields.
+  const label = page.getByLabel("Layer name");
+  await label.fill("renamed");
+  await label.click();
+  await page.keyboard.press("Control+a");
+  expect(await page.evaluate(() => window.getSelection()?.toString())).not.toBe(
+    "",
+  );
+  await label.fill("Headline");
+});
+
+test("pan tool moves the workspace, not the objects, and the pad nudges", async ({
+  page,
+}) => {
+  const bounds = await page.locator(".artboard-canvas").first().boundingBox();
+  if (!bounds) throw Error("Missing canvas");
+  const s = bounds.width / 1080;
+
+  await page.getByRole("button", { name: /Pan tool/ }).click();
+
+  // Dragging across an object scrolls the workspace instead of moving it.
+  await page.mouse.move(bounds.x + 200 * s, bounds.y + 260 * s);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 60, bounds.y + 40, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("zero-mockup-project-v1")!),
+  );
+  const headline = saved.pages[0].objects.find(
+    (o: { name: string }) => o.name === "Headline",
+  );
+  expect([headline.x, headline.y]).toEqual([100, 220]);
+  // Nothing got selected either — the pan tool only moves the view.
+  await expect(page.getByRole("heading", { name: /selected/ })).toHaveCount(0);
+
+  // Select an object another way: the pad then nudges it.
+  await page
+    .getByRole("button", { name: "Layers", exact: true })
+    .first()
+    .click();
+  await page
+    .locator(".layer-item")
+    .filter({ has: page.getByText("Headline", { exact: true }) })
+    .click();
+  await expect(page.getByLabel("Move right")).toBeVisible();
+  const x = page.getByLabel("X", { exact: true });
+  await page.getByLabel("Move right").click();
+  expect(Number(await x.inputValue())).toBeGreaterThan(100);
+  await page.getByRole("button", { name: "Undo (Ctrl+Z)" }).click();
+  await expect(x).toHaveValue("100");
+
+  // And with nothing selected the pad pans the workspace.
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("Pan right")).toBeVisible();
+});
+
+test("arrow keys nudge the selection and undo once per burst", async ({
+  page,
+}) => {
+  const bounds = await page.locator(".artboard-canvas").first().boundingBox();
+  if (!bounds) throw Error("Missing canvas");
+  const s = bounds.width / 1080;
+  await page.mouse.click(bounds.x + 200 * s, bounds.y + 260 * s);
+  const x = page.getByLabel("X", { exact: true });
+  const start = Number(await x.inputValue());
+
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowRight");
+  await expect(x).toHaveValue(String(start + 5));
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect(page.getByLabel("Y", { exact: true })).toHaveValue("270");
+
+  await page.getByRole("button", { name: "Undo (Ctrl+Z)" }).click();
+  await expect(x).toHaveValue(String(start));
 });

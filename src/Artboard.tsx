@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Stage,
   Layer,
@@ -17,6 +17,7 @@ import Konva from "konva";
 import { perspectiveCanvas } from "./perspective";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { demoScreen, type DesignObject, type Page } from "./model";
+import { cachePixelRatioForScale, isCoarsePointer } from "./perf";
 
 function useImage(src?: string) {
   const [image, setImage] = useState<HTMLImageElement>();
@@ -36,6 +37,47 @@ function useImage(src?: string) {
   }, [src]);
   return image;
 }
+/** Cache resolution for a node, matched to its on-screen size. */
+function nodeCacheRatio(node: Konva.Node) {
+  return cachePixelRatioForScale(node.getStage()?.scaleX() ?? 1);
+}
+/**
+ * Cover-cropping and 3D projection are the only reasons a node needs a
+ * cached canvas. Konva allocates three canvases per cache at the device
+ * pixel ratio, which used to reserve tens of megabytes per device mockup on
+ * phones, so the cache only exists while filters are actually in use.
+ */
+function hasToneFilters(o: DesignObject) {
+  return !!(o.brightness || o.contrast || o.saturation);
+}
+function useToneCache(
+  ref: React.RefObject<Konva.Image | null>,
+  o: DesignObject,
+  image?: HTMLImageElement,
+) {
+  const active = hasToneFilters(o);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    if (image && active) {
+      node.cache({ pixelRatio: nodeCacheRatio(node) });
+      node.getLayer()?.batchDraw();
+    } else if (node.isCached()) {
+      node.clearCache();
+      node.getLayer()?.batchDraw();
+    }
+  }, [
+    ref,
+    image,
+    active,
+    o.width,
+    o.height,
+    o.brightness,
+    o.contrast,
+    o.saturation,
+  ]);
+  return active;
+}
 function roundedPath(ctx: Konva.Context, w: number, h: number, r: number) {
   ctx.beginPath();
   ctx.moveTo(r, 0);
@@ -45,15 +87,10 @@ function roundedPath(ctx: Konva.Context, w: number, h: number, r: number) {
   ctx.arcTo(0, 0, w, 0, r);
   ctx.closePath();
 }
-function ImageContent({ o }: { o: DesignObject }) {
+const ImageContent = memo(function ImageContent({ o }: { o: DesignObject }) {
   const image = useImage(o.src);
   const ref = useRef<Konva.Image>(null);
-  useEffect(() => {
-    if (ref.current && image) {
-      ref.current.cache();
-      ref.current.getLayer()?.batchDraw();
-    }
-  }, [image, o.width, o.height, o.brightness, o.contrast, o.saturation]);
+  const filtered = useToneCache(ref, o, image);
   return (
     <Group
       clipFunc={(ctx) =>
@@ -70,19 +107,23 @@ function ImageContent({ o }: { o: DesignObject }) {
         image={image}
         width={o.width}
         height={o.height}
-        filters={[
-          Konva.Filters.Brighten,
-          Konva.Filters.Contrast,
-          Konva.Filters.HSL,
-        ]}
+        filters={
+          filtered
+            ? [
+                Konva.Filters.Brighten,
+                Konva.Filters.Contrast,
+                Konva.Filters.HSL,
+              ]
+            : undefined
+        }
         brightness={o.brightness || 0}
         contrast={o.contrast || 0}
         saturation={o.saturation || 0}
       />
     </Group>
   );
-}
-function Phone({ o }: { o: DesignObject }) {
+});
+const Phone = memo(function Phone({ o }: { o: DesignObject }) {
   const src = useMemo(() => o.src || demoScreen(o.demo), [o.src, o.demo]);
   const image = useImage(src);
   const ref = useRef<Konva.Image>(null);
@@ -99,6 +140,7 @@ function Phone({ o }: { o: DesignObject }) {
   const padding = Math.ceil(Math.max((o.shadow || 0) * 3, w * 0.12, h * 0.1));
   const iw = w - inset * 2,
     ih = h - inset * 2;
+  const filtered = useToneCache(ref, o, image);
   const crop = image
     ? (() => {
         const ratio = iw / ih;
@@ -119,12 +161,6 @@ function Phone({ o }: { o: DesignObject }) {
       })()
     : undefined;
   useEffect(() => {
-    if (ref.current && image) {
-      ref.current.cache();
-      ref.current.getLayer()?.batchDraw();
-    }
-  }, [image, w, h, o.brightness, o.contrast, o.saturation]);
-  useEffect(() => {
     if (!o.tilt || !faceRef.current || !image) {
       setProjected(undefined);
       return;
@@ -135,7 +171,9 @@ function Phone({ o }: { o: DesignObject }) {
       y: 0,
       opacity: 1,
     });
-    copy.find("Image").forEach((node) => node.cache());
+    copy.find("Image").forEach((node) => {
+      if (hasToneFilters(o)) node.cache({ pixelRatio: nodeCacheRatio(node) });
+    });
     const snapshot = copy.toCanvas({
       x: -padding,
       y: -padding,
@@ -215,11 +253,15 @@ function Phone({ o }: { o: DesignObject }) {
             width={iw}
             height={ih}
             crop={crop}
-            filters={[
-              Konva.Filters.Brighten,
-              Konva.Filters.Contrast,
-              Konva.Filters.HSL,
-            ]}
+            filters={
+              filtered
+                ? [
+                    Konva.Filters.Brighten,
+                    Konva.Filters.Contrast,
+                    Konva.Filters.HSL,
+                  ]
+                : undefined
+            }
             brightness={o.brightness || 0}
             contrast={o.contrast || 0}
             saturation={o.saturation || 0}
@@ -256,8 +298,8 @@ function Phone({ o }: { o: DesignObject }) {
       )}
     </Group>
   );
-}
-function ObjectContent({ o }: { o: DesignObject }) {
+});
+const ObjectContent = memo(function ObjectContent({ o }: { o: DesignObject }) {
   if (o.kind === "device") return <Phone o={o} />;
   if (o.kind === "image" || o.kind === "icon") return <ImageContent o={o} />;
   if (o.kind === "text")
@@ -375,25 +417,74 @@ function ObjectContent({ o }: { o: DesignObject }) {
         />
       );
   }
+});
+/**
+ * Dots and grids used to be one Konva node per line/dot — up to ~600 nodes
+ * per page, rebuilt on every React render and re-drawn on every frame. A
+ * single 60px tile painted as a fill pattern draws identically with one node.
+ */
+function usePatternTile(pattern: "dots" | "grid", color: string) {
+  return useMemo(() => {
+    const size = 60;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return canvas;
+    ctx.fillStyle = color;
+    if (pattern === "dots") {
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.arc(30, 30, 3, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.globalAlpha = 0.2;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 1);
+      ctx.lineTo(size, 1);
+      ctx.moveTo(1, 0);
+      ctx.lineTo(1, size);
+      ctx.stroke();
+    }
+    return canvas;
+  }, [pattern, color]);
 }
-function Background({
+const Background = memo(function Background({
   page,
   transparent,
+  scale,
 }: {
   page: Page;
   transparent?: boolean;
+  scale: number;
 }) {
   const b = page.background,
     w = page.width,
     h = page.height;
   const image = useImage(b.src);
   const ref = useRef<Konva.Image>(null);
+  const blurred = b.type === "image" && b.blur > 0;
+  // The blur filter needs a cached canvas, and its radius is measured in
+  // cache pixels. Scaling the radius by the cache ratio keeps the blur
+  // looking the same on every device pixel ratio.
+  const ratio = cachePixelRatioForScale(scale);
   useEffect(() => {
-    if (ref.current && image) {
-      ref.current.cache();
-      ref.current.getLayer()?.batchDraw();
+    const node = ref.current;
+    if (!node) return;
+    if (image && blurred) {
+      node.cache({ pixelRatio: nodeCacheRatio(node) });
+      node.getLayer()?.batchDraw();
+    } else if (node.isCached()) {
+      node.clearCache();
+      node.getLayer()?.batchDraw();
     }
-  }, [image, b.blur, b.type, w, h]);
+  }, [image, blurred, w, h]);
+  const tile = usePatternTile(
+    b.pattern === "grid" ? "grid" : "dots",
+    b.colors[1] || "#254e3b",
+  );
   if (transparent) return null;
   const angle = (b.angle * Math.PI) / 180;
   const length = Math.abs(w * Math.cos(angle)) + Math.abs(h * Math.sin(angle));
@@ -432,77 +523,60 @@ function Background({
           width={w}
           height={h}
           opacity={b.opacity}
-          filters={[Konva.Filters.Blur]}
-          blurRadius={b.blur}
+          filters={blurred ? [Konva.Filters.Blur] : undefined}
+          blurRadius={b.blur * ratio}
         />
       )}
       {b.type === "pattern" &&
-        Array.from({ length: Math.min(80, Math.ceil(h / 60)) }, (_, i) =>
-          b.pattern === "dots" ? (
-            Array.from({ length: Math.min(80, Math.ceil(w / 60)) }, (_, j) => (
-              <Circle
-                key={`${i}-${j}`}
-                x={j * 60 + 30}
-                y={i * 60 + 30}
-                radius={3}
-                fill={b.colors[1] || "#254e3b"}
-                opacity={0.35}
-              />
-            ))
-          ) : b.pattern === "grid" ? (
-            <Line
-              key={i}
-              points={[0, i * 60, w, i * 60]}
-              stroke={b.colors[1]}
-              opacity={0.2}
-              strokeWidth={2}
-            />
-          ) : (
-            <Line
-              key={i}
-              points={Array.from({ length: Math.ceil(w / 60) + 1 }, (_, j) => [
-                j * 60,
-                i * 80 + Math.sin(j) * 22,
-              ]).flat()}
-              tension={0.5}
-              stroke={b.colors[1]}
-              opacity={0.3}
-              strokeWidth={3}
-            />
-          ),
+        (b.pattern === "dots" || b.pattern === "grid") && (
+          <Rect
+            width={w}
+            height={h}
+            // Konva accepts a canvas tile; its config type only lists images.
+            fillPatternImage={tile as unknown as HTMLImageElement}
+            fillPatternRepeat="repeat"
+          />
         )}
       {b.type === "pattern" &&
-        b.pattern === "grid" &&
-        Array.from({ length: Math.min(80, Math.ceil(w / 60)) }, (_, i) => (
+        b.pattern === "waves" &&
+        Array.from({ length: Math.min(80, Math.ceil(h / 60)) }, (_, i) => (
           <Line
-            key={"v" + i}
-            points={[i * 60, 0, i * 60, h]}
+            key={i}
+            points={Array.from({ length: Math.ceil(w / 60) + 1 }, (_, j) => [
+              j * 60,
+              i * 80 + Math.sin(j) * 22,
+            ]).flat()}
+            tension={0.5}
             stroke={b.colors[1]}
-            opacity={0.2}
-            strokeWidth={2}
+            opacity={0.3}
+            strokeWidth={3}
           />
         ))}
     </Group>
   );
-}
+});
 export type ArtboardProps = {
   page: Page;
   scale: number;
   active: boolean;
   selected: string[];
   onSelect: (ids: string[]) => void;
-  onChange: (objects: DesignObject[]) => void;
-  onActivate: () => void;
-  onEditText: (id: string) => void;
-  onContext: (e: { x: number; y: number }, id?: string) => void;
+  onChange: (pageId: string, objects: DesignObject[]) => void;
+  onActivate: (pageId: string) => void;
+  onEditText: (pageId: string, id: string) => void;
+  onContext: (pageId: string, e: { x: number; y: number }, id?: string) => void;
   register: (id: string, stage: Konva.Stage | null) => void;
   grid: boolean;
   preview?: boolean;
   transparent?: boolean;
   selectMode?: boolean;
   panMode?: boolean;
+  /** Mount the stage only once the page scrolls near the viewport. */
+  defer?: boolean;
+  /** Bumped when webfonts finish loading so text is measured again. */
+  fontEpoch?: number;
 };
-export default function Artboard({
+function Artboard({
   page,
   scale,
   active,
@@ -518,56 +592,130 @@ export default function Artboard({
   transparent,
   selectMode,
   panMode,
+  defer,
+  fontEpoch,
 }: ArtboardProps) {
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
-  const [guides, setGuides] = useState<{ x?: number; y?: number }>({});
-  const [box, setBox] = useState<{
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-  } | null>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const guideXRef = useRef<Konva.Line>(null);
+  const guideYRef = useRef<Konva.Line>(null);
+  const marqueeRef = useRef<Konva.Rect>(null);
   const startRef = useRef<{ x: number; y: number } | null>(null);
+  const boxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(
+    null,
+  );
+  const guidesRef = useRef<{ x?: number; y?: number }>({});
+  const [mounted, setMounted] = useState(!defer);
   const dragStart = useRef<
     | {
-        x: number;
-        y: number;
+        /** Start position of the dragged node; only the select tool sets it. */
+        x?: number;
+        y?: number;
+        /** Pointer position when the move started, in page coordinates. */
+        point?: { x: number; y: number };
         positions: { id: string; x: number; y: number }[];
+        targets: { x: number; y: number; width: number; height: number }[];
       }
     | undefined
   >(undefined);
   useEffect(() => {
+    if (mounted) return;
+    if (!defer) {
+      setMounted(true);
+      return;
+    }
+    const el = hostRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setMounted(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) setMounted(true);
+      },
+      { rootMargin: "320px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [defer, mounted]);
+  useEffect(() => {
     register(page.id, stageRef.current);
     return () => register(page.id, null);
-  }, [page.id, register]);
+  }, [page.id, register, mounted]);
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
     const nodes =
-      active && !preview
+      active && !preview && !panMode
         ? (selected
             .map((id) => stage.findOne("#o-" + id))
             .filter(Boolean) as Konva.Node[])
         : [];
     trRef.current?.nodes(nodes);
     trRef.current?.getLayer()?.batchDraw();
-  }, [selected, active, page.objects, preview]);
+  }, [selected, active, page.objects, preview, panMode, mounted, fontEpoch]);
+  /**
+   * Guides and the marquee are painted straight into the overlay layer.
+   * Setting them through React state meant re-rendering every object on the
+   * page on every pointer frame, which is what made dragging crawl on
+   * phones.
+   */
+  const paintGuides = (next: { x?: number; y?: number }) => {
+    const previous = guidesRef.current;
+    if (previous.x === next.x && previous.y === next.y) return;
+    guidesRef.current = next;
+    const x = guideXRef.current,
+      y = guideYRef.current;
+    if (x)
+      next.x === undefined
+        ? x.visible(false)
+        : x.visible(true).points([next.x, 0, next.x, page.height]);
+    if (y)
+      next.y === undefined
+        ? y.visible(false)
+        : y.visible(true).points([0, next.y, page.width, next.y]);
+    (x ?? y)?.getLayer()?.batchDraw();
+  };
+  const paintBox = (
+    next: { x: number; y: number; w: number; h: number } | null,
+  ) => {
+    const node = marqueeRef.current;
+    if (!node) return;
+    if (!next) node.visible(false);
+    else
+      node
+        .visible(true)
+        .x(Math.min(next.x, next.x + next.w))
+        .y(Math.min(next.y, next.y + next.h))
+        .width(Math.abs(next.w))
+        .height(Math.abs(next.h));
+    node.getLayer()?.batchDraw();
+  };
+  useEffect(() => {
+    guidesRef.current = {};
+    guideXRef.current?.visible(false);
+    guideYRef.current?.visible(false);
+    paintBox(null);
+  }, [page.objects, selected, scale]);
   const getPoint = () => {
     const p = stageRef.current?.getPointerPosition();
     return p ? { x: p.x / scale, y: p.y / scale } : null;
   };
+  /** The ids a press on `o` should act on — its whole group, or just itself. */
+  const groupIds = (o: DesignObject) =>
+    o.groupId
+      ? page.objects
+          .filter((n) => n.groupId === o.groupId && !n.locked)
+          .map((n) => n.id)
+      : [o.id];
   const pick = (
     o: DesignObject,
     e: KonvaEventObject<MouseEvent | TouchEvent | PointerEvent>,
   ) => {
     if (preview || panMode) return;
-    onActivate();
-    const group = o.groupId
-      ? page.objects
-          .filter((n) => n.groupId === o.groupId && !n.locked)
-          .map((n) => n.id)
-      : [o.id];
+    onActivate(page.id);
+    const group = groupIds(o);
     const shift = ("shiftKey" in e.evt && e.evt.shiftKey) || selectMode;
     onSelect(
       shift
@@ -600,273 +748,346 @@ export default function Artboard({
       node.scale({ x: 1, y: 1 });
       return next;
     });
-    onChange(objects);
+    onChange(page.id, objects);
   };
+  const coarse = isCoarsePointer();
+  if (!mounted)
+    return (
+      <div
+        ref={hostRef}
+        className="artboard-stage-host"
+        style={{
+          width: page.width * scale,
+          height: page.height * scale,
+          background: page.background.color,
+        }}
+      />
+    );
   return (
-    <Stage
-      width={page.width * scale}
-      height={page.height * scale}
-      scaleX={scale}
-      scaleY={scale}
-      ref={stageRef}
-      onContextMenu={(e) => {
-        e.evt.preventDefault();
-        if (!preview) onContext({ x: e.evt.clientX, y: e.evt.clientY });
-      }}
-      onPointerDown={(e) => {
-        if (preview || panMode) return;
-        if (e.target === e.target.getStage()) {
-          onActivate();
-          onSelect([]);
-          const p = getPoint();
-          if (p) {
-            startRef.current = p;
-            setBox({ ...p, w: 0, h: 0 });
+    <div ref={hostRef} className="artboard-stage-host">
+      <Stage
+        width={page.width * scale}
+        height={page.height * scale}
+        scaleX={scale}
+        scaleY={scale}
+        ref={stageRef}
+        onContextMenu={(e) => {
+          e.evt.preventDefault();
+          if (!preview)
+            onContext(page.id, { x: e.evt.clientX, y: e.evt.clientY });
+        }}
+        onPointerDown={(e) => {
+          if (preview || panMode) return;
+          if (e.target === e.target.getStage()) {
+            onActivate(page.id);
+            onSelect([]);
+            const p = getPoint();
+            if (p) {
+              startRef.current = p;
+              boxRef.current = { ...p, w: 0, h: 0 };
+            }
           }
-        }
-      }}
-      onPointerMove={() => {
-        if (!startRef.current) return;
-        const p = getPoint();
-        if (p)
-          setBox({
+        }}
+        onPointerMove={() => {
+          if (!startRef.current) return;
+          const p = getPoint();
+          if (!p) return;
+          const next = {
             x: startRef.current.x,
             y: startRef.current.y,
             w: p.x - startRef.current.x,
             h: p.y - startRef.current.y,
-          });
-      }}
-      onPointerUp={() => {
-        if (box && Math.abs(box.w) + Math.abs(box.h) > 15) {
-          const r = {
-            x: Math.min(box.x, box.x + box.w),
-            y: Math.min(box.y, box.y + box.h),
-            width: Math.abs(box.w),
-            height: Math.abs(box.h),
           };
-          onSelect(
-            page.objects
-              .filter(
-                (o) =>
-                  !o.locked &&
-                  o.visible &&
-                  Konva.Util.haveIntersection(r, {
-                    x: o.x,
-                    y: o.y,
-                    width: o.width,
-                    height: o.height,
-                  }),
-              )
-              .map((o) => o.id),
-          );
-        }
-        startRef.current = null;
-        setBox(null);
-      }}
-    >
-      <Layer>
-        <Background page={page} transparent={transparent} />
-        <Group
-          clipX={0}
-          clipY={0}
-          clipWidth={page.width}
-          clipHeight={page.height}
-        >
-          {page.objects
-            .filter((o) => o.visible)
-            .map((o) => (
-              <Group
-                key={o.id}
-                id={"o-" + o.id}
-                x={o.x}
-                y={o.y}
-                width={o.width}
-                height={o.height}
-                rotation={o.rotation}
-                opacity={o.opacity}
-                draggable={!o.locked && !preview && !panMode}
-                listening={!preview && !panMode}
-                onClick={(e) => pick(o, e)}
-                onTap={(e) => pick(o, e)}
-                onDblClick={() => {
-                  if (o.kind === "text") onEditText(o.id);
-                }}
-                onDblTap={() => {
-                  if (o.kind === "text") onEditText(o.id);
-                }}
-                onContextMenu={(e) => {
-                  e.cancelBubble = true;
-                  e.evt.preventDefault();
-                  onActivate();
-                  onSelect([o.id]);
-                  onContext({ x: e.evt.clientX, y: e.evt.clientY }, o.id);
-                }}
-                onDragStart={(e) => {
-                  onActivate();
-                  if (!selected.includes(o.id))
-                    onSelect(
-                      o.groupId
-                        ? page.objects
-                            .filter((n) => n.groupId === o.groupId && !n.locked)
-                            .map((n) => n.id)
-                        : [o.id],
-                    );
-                  const ids = selected.includes(o.id)
-                    ? selected
-                    : o.groupId
-                      ? page.objects
-                          .filter((n) => n.groupId === o.groupId)
-                          .map((n) => n.id)
-                      : [o.id];
-                  dragStart.current = {
-                    x: e.target.x(),
-                    y: e.target.y(),
-                    positions: page.objects
-                      .filter((n) => ids.includes(n.id) && !n.locked)
-                      .map((n) => ({ id: n.id, x: n.x, y: n.y })),
-                  };
-                }}
-                onDragMove={(e) => {
-                  const n = e.target;
-                  const targets = page.objects.filter(
-                    (t) =>
-                      t.id !== o.id && !selected.includes(t.id) && t.visible,
-                  );
-                  const snapX = [
-                    page.width / 2,
-                    ...targets.map((t) => t.x + t.width / 2),
-                  ];
-                  const snapY = [
-                    page.height / 2,
-                    ...targets.map((t) => t.y + t.height / 2),
-                  ];
-                  const g: { x?: number; y?: number } = {};
-                  for (const x of snapX)
-                    if (Math.abs(n.x() + o.width / 2 - x) < 14) {
-                      n.x(x - o.width / 2);
-                      g.x = x;
-                      break;
-                    }
-                  for (const y of snapY)
-                    if (Math.abs(n.y() + o.height / 2 - y) < 14) {
-                      n.y(y - o.height / 2);
-                      g.y = y;
-                      break;
-                    }
-                  setGuides(g);
-                  const d = dragStart.current;
-                  if (d)
-                    d.positions.forEach((p) => {
-                      if (p.id !== o.id)
-                        stageRef.current?.findOne("#o-" + p.id)?.position({
-                          x: p.x + n.x() - d.x,
-                          y: p.y + n.y() - d.y,
-                        });
-                    });
-                }}
-                onDragEnd={(e) => {
-                  setGuides({});
-                  const d = dragStart.current;
-                  onChange(
-                    page.objects.map((n) => {
-                      const p = d?.positions.find((p) => p.id === n.id);
-                      return p
-                        ? {
-                            ...n,
-                            x: Math.round(p.x + e.target.x() - d!.x),
-                            y: Math.round(p.y + e.target.y() - d!.y),
-                          }
-                        : n;
+          boxRef.current = next;
+          paintBox(next);
+        }}
+        onPointerCancel={() => {
+          startRef.current = null;
+          boxRef.current = null;
+          paintBox(null);
+        }}
+        onPointerUp={() => {
+          const box = boxRef.current;
+          if (box && Math.abs(box.w) + Math.abs(box.h) > 15) {
+            const r = {
+              x: Math.min(box.x, box.x + box.w),
+              y: Math.min(box.y, box.y + box.h),
+              width: Math.abs(box.w),
+              height: Math.abs(box.h),
+            };
+            onSelect(
+              page.objects
+                .filter(
+                  (o) =>
+                    !o.locked &&
+                    o.visible &&
+                    Konva.Util.haveIntersection(r, {
+                      x: o.x,
+                      y: o.y,
+                      width: o.width,
+                      height: o.height,
                     }),
-                  );
-                  dragStart.current = undefined;
-                }}
-              >
-                <ObjectContent o={o} />
-              </Group>
-            ))}
-        </Group>
-      </Layer>
-      <Layer name="editor-overlay" listening={!preview} visible={!preview}>
-        {grid && (
-          <Group listening={false}>
-            {Array.from({ length: Math.ceil(page.width / 100) }, (_, i) => (
-              <Line
-                key={"gx" + i}
-                points={[i * 100, 0, i * 100, page.height]}
-                stroke="#596e8050"
-                strokeWidth={1 / scale}
-              />
-            ))}
-            {Array.from({ length: Math.ceil(page.height / 100) }, (_, i) => (
-              <Line
-                key={"gy" + i}
-                points={[0, i * 100, page.width, i * 100]}
-                stroke="#596e8050"
-                strokeWidth={1 / scale}
-              />
-            ))}
+                )
+                .map((o) => o.id),
+            );
+          }
+          startRef.current = null;
+          boxRef.current = null;
+          paintBox(null);
+        }}
+      >
+        <Layer>
+          <Background page={page} transparent={transparent} scale={scale} />
+          <Group
+            clipX={0}
+            clipY={0}
+            clipWidth={page.width}
+            clipHeight={page.height}
+          >
+            <Group key={"objects-" + (fontEpoch || 0)}>
+              {page.objects
+                .filter((o) => o.visible)
+                .map((o) => (
+                  <Group
+                    key={o.id}
+                    id={"o-" + o.id}
+                    x={o.x}
+                    y={o.y}
+                    width={o.width}
+                    height={o.height}
+                    rotation={o.rotation}
+                    opacity={o.opacity}
+                    draggable={!o.locked && !panMode && !preview}
+                    /* While the pan tool is active the objects stop listening
+                       entirely, so a drag anywhere — object, page or empty
+                       canvas — scrolls the workspace instead. */
+                    listening={!preview && !panMode}
+                    onClick={(e) => pick(o, e)}
+                    onTap={(e) => pick(o, e)}
+                    onDblClick={() => {
+                      if (o.kind === "text") onEditText(page.id, o.id);
+                    }}
+                    onDblTap={() => {
+                      if (o.kind === "text") onEditText(page.id, o.id);
+                    }}
+                    onContextMenu={(e) => {
+                      e.cancelBubble = true;
+                      e.evt.preventDefault();
+                      onActivate(page.id);
+                      onSelect([o.id]);
+                      onContext(
+                        page.id,
+                        { x: e.evt.clientX, y: e.evt.clientY },
+                        o.id,
+                      );
+                    }}
+                    onDragStart={(e) => {
+                      onActivate(page.id);
+                      if (!selected.includes(o.id))
+                        onSelect(
+                          o.groupId
+                            ? page.objects
+                                .filter(
+                                  (n) => n.groupId === o.groupId && !n.locked,
+                                )
+                                .map((n) => n.id)
+                            : [o.id],
+                        );
+                      const ids = selected.includes(o.id)
+                        ? selected
+                        : o.groupId
+                          ? page.objects
+                              .filter((n) => n.groupId === o.groupId)
+                              .map((n) => n.id)
+                          : [o.id];
+                      dragStart.current = {
+                        x: e.target.x(),
+                        y: e.target.y(),
+                        positions: page.objects
+                          .filter((n) => ids.includes(n.id) && !n.locked)
+                          .map((n) => ({ id: n.id, x: n.x, y: n.y })),
+                        targets: page.objects.filter(
+                          (t) =>
+                            t.id !== o.id &&
+                            !selected.includes(t.id) &&
+                            t.visible,
+                        ),
+                      };
+                    }}
+                    onDragMove={(e) => {
+                      const n = e.target;
+                      const d = dragStart.current;
+                      const g: { x?: number; y?: number } = {};
+                      if (Math.abs(n.x() + o.width / 2 - page.width / 2) < 14) {
+                        n.x(page.width / 2 - o.width / 2);
+                        g.x = page.width / 2;
+                      } else if (d)
+                        for (const t of d.targets)
+                          if (
+                            Math.abs(
+                              n.x() + o.width / 2 - (t.x + t.width / 2),
+                            ) < 14
+                          ) {
+                            n.x(t.x + t.width / 2 - o.width / 2);
+                            g.x = t.x + t.width / 2;
+                            break;
+                          }
+                      if (
+                        Math.abs(n.y() + o.height / 2 - page.height / 2) < 14
+                      ) {
+                        n.y(page.height / 2 - o.height / 2);
+                        g.y = page.height / 2;
+                      } else if (d)
+                        for (const t of d.targets)
+                          if (
+                            Math.abs(
+                              n.y() + o.height / 2 - (t.y + t.height / 2),
+                            ) < 14
+                          ) {
+                            n.y(t.y + t.height / 2 - o.height / 2);
+                            g.y = t.y + t.height / 2;
+                            break;
+                          }
+                      paintGuides(g);
+                      if (d && d.x !== undefined && d.y !== undefined)
+                        d.positions.forEach((p) => {
+                          if (p.id !== o.id)
+                            stageRef.current?.findOne("#o-" + p.id)?.position({
+                              x: p.x + n.x() - d.x!,
+                              y: p.y + n.y() - d.y!,
+                            });
+                        });
+                    }}
+                    onDragEnd={(e) => {
+                      const d = dragStart.current;
+                      paintGuides({});
+                      const startX = d?.x ?? e.target.x(),
+                        startY = d?.y ?? e.target.y();
+                      onChange(
+                        page.id,
+                        page.objects.map((n) => {
+                          const p = d?.positions.find((p) => p.id === n.id);
+                          return p
+                            ? {
+                                ...n,
+                                x: Math.round(p.x + e.target.x() - startX),
+                                y: Math.round(p.y + e.target.y() - startY),
+                              }
+                            : n;
+                        }),
+                      );
+                      dragStart.current = undefined;
+                    }}
+                  >
+                    <ObjectContent o={o} />
+                  </Group>
+                ))}
+            </Group>
           </Group>
+        </Layer>
+        {!preview && (
+          <Layer name="editor-overlay" listening>
+            {grid && (
+              <Group listening={false}>
+                {Array.from({ length: Math.ceil(page.width / 100) }, (_, i) => (
+                  <Line
+                    key={"gx" + i}
+                    points={[i * 100, 0, i * 100, page.height]}
+                    stroke="#596e8050"
+                    strokeWidth={1 / scale}
+                  />
+                ))}
+                {Array.from(
+                  { length: Math.ceil(page.height / 100) },
+                  (_, i) => (
+                    <Line
+                      key={"gy" + i}
+                      points={[0, i * 100, page.width, i * 100]}
+                      stroke="#596e8050"
+                      strokeWidth={1 / scale}
+                    />
+                  ),
+                )}
+              </Group>
+            )}
+            <Line
+              ref={guideXRef}
+              visible={false}
+              points={[0, 0, 0, page.height]}
+              stroke="#e77b53"
+              strokeWidth={1 / scale}
+              dash={[10, 10]}
+            />
+            <Line
+              ref={guideYRef}
+              visible={false}
+              points={[0, 0, page.width, 0]}
+              stroke="#e77b53"
+              strokeWidth={1 / scale}
+              dash={[10, 10]}
+            />
+            <Rect
+              ref={marqueeRef}
+              visible={false}
+              fill="#e87b5322"
+              stroke="#e87b53"
+              strokeWidth={1 / scale}
+            />
+            <Transformer
+              ref={trRef}
+              onTransformEnd={transform}
+              rotateEnabled={
+                !selected.some(
+                  (id) => page.objects.find((o) => o.id === id)?.locked,
+                )
+              }
+              resizeEnabled={
+                !selected.some(
+                  (id) => page.objects.find((o) => o.id === id)?.locked,
+                )
+              }
+              borderStroke="#e87b53"
+              anchorStroke="#e87b53"
+              anchorFill="white"
+              anchorSize={coarse ? 14 : 8}
+              anchorCornerRadius={2}
+              anchorStyleFunc={(anchor) =>
+                anchor.hitStrokeWidth(coarse ? 26 : 8)
+              }
+              borderStrokeWidth={1.5}
+              rotateAnchorOffset={25}
+              rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
+              flipEnabled={false}
+              boundBoxFunc={(old, next) =>
+                Math.abs(next.width) < 20 || Math.abs(next.height) < 20
+                  ? old
+                  : next
+              }
+            />
+          </Layer>
         )}
-        {guides.x !== undefined && (
-          <Line
-            points={[guides.x, 0, guides.x, page.height]}
-            stroke="#e77b53"
-            strokeWidth={1 / scale}
-            dash={[10, 10]}
-          />
-        )}
-        {guides.y !== undefined && (
-          <Line
-            points={[0, guides.y, page.width, guides.y]}
-            stroke="#e77b53"
-            strokeWidth={1 / scale}
-            dash={[10, 10]}
-          />
-        )}
-        {box && (
-          <Rect
-            x={Math.min(box.x, box.x + box.w)}
-            y={Math.min(box.y, box.y + box.h)}
-            width={Math.abs(box.w)}
-            height={Math.abs(box.h)}
-            fill="#e87b5322"
-            stroke="#e87b53"
-            strokeWidth={1 / scale}
-          />
-        )}
-        <Transformer
-          ref={trRef}
-          onTransformEnd={transform}
-          rotateEnabled={
-            !selected.some(
-              (id) => page.objects.find((o) => o.id === id)?.locked,
-            )
-          }
-          resizeEnabled={
-            !selected.some(
-              (id) => page.objects.find((o) => o.id === id)?.locked,
-            )
-          }
-          borderStroke="#e87b53"
-          anchorStroke="#e87b53"
-          anchorFill="white"
-          anchorSize={window.matchMedia("(pointer: coarse)").matches ? 14 : 8}
-          anchorCornerRadius={2}
-          anchorStyleFunc={(anchor) =>
-            anchor.hitStrokeWidth(
-              window.matchMedia("(pointer: coarse)").matches ? 26 : 8,
-            )
-          }
-          borderStrokeWidth={1.5}
-          rotateAnchorOffset={25}
-          rotationSnaps={[0, 45, 90, 135, 180, 225, 270, 315]}
-          flipEnabled={false}
-          boundBoxFunc={(old, next) =>
-            Math.abs(next.width) < 20 || Math.abs(next.height) < 20 ? old : next
-          }
-        />
-      </Layer>
-    </Stage>
+      </Stage>
+    </div>
   );
 }
+export default memo(Artboard, (a, b) => {
+  if (a.page !== b.page || a.scale !== b.scale) return false;
+  if (
+    a.active !== b.active ||
+    a.grid !== b.grid ||
+    a.preview !== b.preview ||
+    a.transparent !== b.transparent ||
+    a.selectMode !== b.selectMode ||
+    a.panMode !== b.panMode ||
+    a.defer !== b.defer ||
+    a.fontEpoch !== b.fontEpoch
+  )
+    return false;
+  const s1 = a.selected,
+    s2 = b.selected;
+  if (s1 !== s2) {
+    if (s1.length !== s2.length) return false;
+    for (let i = 0; i < s1.length; i++) if (s1[i] !== s2[i]) return false;
+  }
+  return true;
+});

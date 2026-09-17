@@ -25,6 +25,30 @@
 body {
   margin: 0;
 }
+/**
+ * The editor is a canvas app, not a document: pressing and holding (or
+ * dragging with the mouse) must never select text or pop the browser's
+ * copy/callout bubble. Fields that really hold text opt back in below.
+ */
+html,
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+img,
+canvas {
+  -webkit-user-drag: none;
+  user-select: none;
+}
 button,
 input,
 select,
@@ -819,6 +843,11 @@ h3 {
   outline-offset: 0;
   overflow: hidden;
 }
+/* Wrapper around each Konva stage (also the placeholder for pages that are
+   scrolled out of view on touch devices). */
+.artboard-stage-host {
+  position: relative;
+}
 .artboard-canvas.active {
   outline: 1.5px solid #df8c67;
   outline-offset: 4px;
@@ -861,6 +890,58 @@ h3 {
 .add-artboard:hover {
   background: #e2e8d9;
   color: #657a51;
+}
+/* Directional pad for the pan tool: precise up/down/left/right movement on
+   touch screens, where a drag is never quite as exact. */
+.nudge-pad {
+  position: absolute;
+  left: 16px;
+  bottom: 78px;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(3, 34px);
+  grid-template-rows: repeat(3, 34px);
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #ffffffee;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 10px 26px #23311b14;
+}
+[data-theme="dark"] .nudge-pad {
+  background: #252b25ee;
+}
+.nudge-pad > button {
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--subtle);
+  background: var(--input);
+  border: 1px solid transparent;
+  touch-action: none;
+}
+.nudge-pad > button:hover,
+.nudge-pad > button:focus-visible {
+  background: var(--hover);
+  color: var(--ink);
+}
+.nudge-pad > button:active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.nudge-pad > .is-up {
+  grid-area: 1 / 2;
+}
+.nudge-pad > .is-left {
+  grid-area: 2 / 1;
+}
+.nudge-pad > .is-right {
+  grid-area: 2 / 3;
+}
+.nudge-pad > .is-down {
+  grid-area: 3 / 2;
 }
 .canvas-bottom {
   height: 61px;
@@ -947,6 +1028,10 @@ h3 {
   white-space: nowrap;
   color: #96a087;
   min-height: 35px;
+  /* Tabs open a menu on press-and-hold, so keep the browser's own long-press
+     selection callout out of the way. */
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 .page-tabs > button.active {
   background: #edf1e6;
@@ -1147,6 +1232,68 @@ h3 {
 }
 .segmented > button:hover {
   color: #597042;
+}
+/* Background type picker: three tiles with a live preview of each mode. */
+.bg-types {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.bg-types > button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 4px 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input);
+  color: #9ba48f;
+  font-size: 9px;
+  line-height: 1;
+}
+.bg-types > button:hover {
+  color: #597042;
+  border-color: #cfdac2;
+}
+.bg-types > button.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: #a5583c;
+}
+.bg-thumb {
+  width: 100%;
+  height: 30px;
+  border-radius: 5px;
+  border: 1px solid #00000010;
+  background: #ffffff8c;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: #a9b39c;
+  background-size: cover;
+  background-position: center;
+}
+.bg-thumb > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.gradient-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.gradient-row > button {
+  height: 28px;
+  border-radius: 5px;
+  border: 1px solid #00000010;
+}
+.gradient-row > button.chosen {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .field-label {
   display: block;
@@ -1823,6 +1970,20 @@ h3 {
   right: 0;
   top: 23px;
   width: 180px;
+}
+/* Press-and-hold menu for the page tabs. Anchored to the bottom strip, so it
+   opens upwards and is positioned in viewport coordinates. */
+.page-tap-menu {
+  position: fixed;
+  z-index: 210;
+  width: 186px;
+  animation: toast-in 0.14s ease-out;
+}
+.page-tap-menu .dropdown-label {
+  padding: 6px 9px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .page-dropdown > button {
   font-size: 10px;
