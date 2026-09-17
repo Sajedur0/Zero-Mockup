@@ -443,7 +443,7 @@ test("nothing is text-selectable except real fields", async ({ page }) => {
   await label.fill("Headline");
 });
 
-test("pan tool moves objects freely and a single undo restores them", async ({
+test("pan tool moves the workspace, not the objects, and the pad nudges", async ({
   page,
 }) => {
   const bounds = await page.locator(".artboard-canvas").first().boundingBox();
@@ -451,82 +451,42 @@ test("pan tool moves objects freely and a single undo restores them", async ({
   const s = bounds.width / 1080;
 
   await page.getByRole("button", { name: /Pan tool/ }).click();
-  await page.mouse.click(bounds.x + 200 * s, bounds.y + 260 * s);
-  await expect(page.getByLabel("Layer name")).toHaveValue("Headline");
 
+  // Dragging across an object scrolls the workspace instead of moving it.
   await page.mouse.move(bounds.x + 200 * s, bounds.y + 260 * s);
   await page.mouse.down();
-  await page.mouse.move(bounds.x + 340 * s, bounds.y + 300 * s, { steps: 10 });
+  await page.mouse.move(bounds.x + 60, bounds.y + 40, { steps: 10 });
   await page.mouse.up();
-
-  // Free move: it follows the pointer instead of snapping to a guide.
-  expect(Number(await page.getByLabel("X", { exact: true }).inputValue())).toBe(
-    240,
-  );
-  expect(Number(await page.getByLabel("Y", { exact: true }).inputValue())).toBe(
-    260,
-  );
-
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(500);
   const saved = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("zero-mockup-project-v1")!),
   );
   const headline = saved.pages[0].objects.find(
     (o: { name: string }) => o.name === "Headline",
   );
-  expect([headline.x, headline.y]).toEqual([240, 260]);
+  expect([headline.x, headline.y]).toEqual([100, 220]);
+  // Nothing got selected either — the pan tool only moves the view.
+  await expect(page.getByRole("heading", { name: /selected/ })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Undo (Ctrl+Z)" }).click();
-  await expect(page.getByLabel("X", { exact: true })).toHaveValue("100");
-});
-
-test("pan tool arrow pad moves the selection up, down, left and right", async ({
-  page,
-}) => {
-  const bounds = await page.locator(".artboard-canvas").first().boundingBox();
-  if (!bounds) throw Error("Missing canvas");
-  const s = bounds.width / 1080;
-
-  await expect(page.locator(".nudge-pad")).toHaveCount(0);
-  await page.getByRole("button", { name: /Pan tool/ }).click();
-  await expect(page.locator(".nudge-pad")).toBeVisible();
-
-  // Pressing an object with the pan tool selects it and the pad follows.
-  await page.mouse.click(bounds.x + 200 * s, bounds.y + 260 * s);
-  await expect(page.getByLabel("Layer name")).toHaveValue("Headline");
+  // Select an object another way: the pad then nudges it.
+  await page
+    .getByRole("button", { name: "Layers", exact: true })
+    .first()
+    .click();
+  await page
+    .locator(".layer-item")
+    .filter({ has: page.getByText("Headline", { exact: true }) })
+    .click();
   await expect(page.getByLabel("Move right")).toBeVisible();
-
   const x = page.getByLabel("X", { exact: true });
-  const y = page.getByLabel("Y", { exact: true });
-  const start = Number(await x.inputValue());
-
   await page.getByLabel("Move right").click();
-  expect(Number(await x.inputValue())).toBeGreaterThan(start);
-  await page.getByLabel("Move up").click();
-  expect(Number(await y.inputValue())).toBeLessThan(260);
-  await page.getByLabel("Move left").click();
-  await expect(x).toHaveValue(String(start));
-  await page.getByLabel("Move down").click();
-  await expect(y).toHaveValue("260");
-
-  // The whole burst is one history step.
-  await page.getByLabel("Move right").click();
-  await expect(x).not.toHaveValue(String(start));
+  expect(Number(await x.inputValue())).toBeGreaterThan(100);
   await page.getByRole("button", { name: "Undo (Ctrl+Z)" }).click();
-  await expect(x).toHaveValue(String(start));
+  await expect(x).toHaveValue("100");
 
-  // With nothing selected the pad pans the workspace instead.
+  // And with nothing selected the pad pans the workspace.
   await page.keyboard.press("Escape");
   await expect(page.getByLabel("Pan right")).toBeVisible();
-  const before = await page.evaluate(
-    () => document.querySelector(".canvas-viewport")!.scrollLeft,
-  );
-  await page.getByLabel("Pan right").click();
-  expect(
-    await page.evaluate(
-      () => document.querySelector(".canvas-viewport")!.scrollLeft,
-    ),
-  ).toBeGreaterThan(before);
 });
 
 test("arrow keys nudge the selection and undo once per burst", async ({

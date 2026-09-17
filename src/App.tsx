@@ -119,8 +119,6 @@ export default function App() {
   const scale = zoom ?? fit;
   const [grid, setGrid] = useState(false);
   const [panMode, setPanMode] = useState(false);
-  /** True while the pan tool is moving an object instead of the viewport. */
-  const panGrabRef = useRef(false);
   const [selectMode, setSelectMode] = useState(false);
   const [dark, setDark] = useState(() => {
     try {
@@ -1243,7 +1241,7 @@ export default function App() {
               setPanMode(true);
               // The hint line is hidden on phones, so say it out loud once.
               notify(
-                "Pan tool: drag an object to move it freely, or drag the canvas to pan.",
+                "Pan tool: drag anywhere to move the workspace. The arrow pad nudges the selection.",
               );
             }}
           >
@@ -1376,19 +1374,20 @@ export default function App() {
             className={`canvas-viewport ${panMode ? "pan-mode" : ""}`}
             ref={viewport}
             onPointerDown={(e) => {
-              if (
-                panMode &&
-                !panGrabRef.current &&
-                e.pointerType === "mouse" &&
-                viewport.current
-              ) {
+              if (panMode && e.pointerType === "mouse" && viewport.current) {
                 mousePan.current = {
                   x: e.clientX,
                   y: e.clientY,
                   left: viewport.current.scrollLeft,
                   top: viewport.current.scrollTop,
                 };
-                e.currentTarget.setPointerCapture(e.pointerId);
+                // Keep panning even when the pointer leaves the viewport
+                // (not every environment implements pointer capture).
+                try {
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                } catch {
+                  /* panning still works while the pointer stays inside */
+                }
               }
             }}
             onPointerMove={(e) => {
@@ -1417,7 +1416,6 @@ export default function App() {
               } else if (
                 e.touches.length === 1 &&
                 panMode &&
-                !panGrabRef.current &&
                 viewport.current
               ) {
                 const [a] = Array.from(e.touches);
@@ -1443,12 +1441,7 @@ export default function App() {
                   touches[1].clientX,
                   touches[1].clientY,
                 );
-              } else if (
-                touches.length === 1 &&
-                panMode &&
-                !panGrabRef.current &&
-                viewport.current
-              ) {
+              } else if (touches.length === 1 && panMode && viewport.current) {
                 const g = gesture.current;
                 if (!g) return;
                 viewport.current.scrollLeft =
@@ -1542,7 +1535,6 @@ export default function App() {
                       panMode={panMode}
                       defer={deferArtboards}
                       fontEpoch={fontEpoch}
-                      panGrabRef={panGrabRef}
                     />
                   </div>
                   <div className="artboard-caption">
@@ -1612,7 +1604,8 @@ export default function App() {
                 <>
                   <span className="keycap">✋</span>
                   <span>
-                    Drag an object to move it freely · drag the canvas to pan
+                    Drag anywhere to move the workspace · arrow pad nudges the
+                    selection
                   </span>
                 </>
               ) : (
@@ -2070,7 +2063,6 @@ export default function App() {
               register={noop}
               grid={false}
               preview
-              panGrabRef={panGrabRef}
             />
             <IconButton
               label="Next page"
@@ -2113,7 +2105,8 @@ export default function App() {
               ["Fit to screen", "⌘ 0"],
               ["Save project", "⌘ S"],
               ["Select / pan", "V / H"],
-              ["Move with the pan tool", "Drag, or the arrow pad"],
+              ["Pan the workspace", "H, then drag"],
+              ["Nudge the selection", "Arrow / ⇧ Arrow, or the pad"],
               ["Deselect / close", "Esc"],
             ].map(([label, key]) => (
               <div key={label}>
@@ -2123,10 +2116,10 @@ export default function App() {
             ))}
           </div>
           <p className="muted-note">
-            On touchscreens, pinch to zoom and pan with two fingers; with the
-            pan tool, drag an object to move it freely and use the arrow pad (or
-            the arrow keys) to nudge it. Enable Select mode to choose multiple
-            objects.
+            On touchscreens, pinch to zoom and pan with two fingers. The pan
+            tool moves the whole workspace (pages included) when you drag, and
+            the arrow pad or arrow keys nudge the selection. Enable Select mode
+            to choose multiple objects.
           </p>
         </Modal>
       )}
