@@ -3,8 +3,10 @@ import {
   cachePixelRatioForScale,
   displayPixelRatio,
   isHandheld,
+  nextFrame,
   stableProps,
   structurallyEqual,
+  waitFor,
 } from "./perf";
 
 describe("structurallyEqual", () => {
@@ -60,5 +62,22 @@ describe("stableProps", () => {
     const b = { page, onAdd: () => 2 };
     expect(stableProps(a, b)).toBe(true);
     expect(stableProps(a, { ...b, page: { id: "q" } })).toBe(false);
+  });
+});
+
+describe("frame and readiness helpers", () => {
+  it("resolves a frame wait even where requestAnimationFrame is missing", async () => {
+    // Node has no rAF; a hidden browser tab never fires one either.
+    await expect(nextFrame(5)).resolves.toBeUndefined();
+  });
+
+  it("waits for something to become true, then gives up politely", async () => {
+    let ready = false;
+    setTimeout(() => (ready = true), 30);
+    await expect(waitFor(() => ready, 2000, 10)).resolves.toBe(true);
+    // A predicate that never becomes true returns false instead of throwing.
+    await expect(waitFor(() => false, 40, 10)).resolves.toBe(false);
+    // Already true: no waiting at all.
+    await expect(waitFor(() => true, 40)).resolves.toBe(true);
   });
 });

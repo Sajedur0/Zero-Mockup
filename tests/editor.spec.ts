@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import JSZip from "jszip";
 import fs from "node:fs/promises";
 
@@ -287,6 +287,223 @@ test("resize handles update size and preserve undo", async ({ page }) => {
     .getByRole("button", { name: "Undo (Ctrl+Z)", exact: true })
     .click();
   await expect(page.getByLabel("W", { exact: true })).toHaveValue("900");
+});
+
+/** A two-tone picture: mostly orange with a white circle on it. */
+const TONE_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="800">' +
+  '<rect width="400" height="800" fill="#FF8855"/>' +
+  '<circle cx="200" cy="300" r="100" fill="#FFFFFF"/></svg>';
+
+/** The page background as the editor persisted it. */
+const savedBackground = (page: Page) =>
+  page.evaluate(() => {
+    const saved = JSON.parse(
+      localStorage.getItem("zero-mockup-project-v1") || "null",
+    );
+    return saved?.pages?.[0]?.background ?? null;
+  });
+
+const channels = (color: string) =>
+  [1, 3, 5].map((i) => Number.parseInt(color.slice(i, i + 2), 16));
+
+test("an uploaded picture suggests solid and gradient backgrounds", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Image", exact: true }).click();
+  const chooser = page.waitForEvent("filechooser");
+  await page
+    .getByRole("button", { name: "Upload background", exact: true })
+    .click();
+  await (
+    await chooser
+  ).setFiles({
+    name: "hero.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from(TONE_SVG),
+  });
+
+  // The colours are read from the picture that was just uploaded.
+  const swatches = page.locator(".swatches.photo > button");
+  await expect(swatches.first()).toBeVisible();
+  const colors = (
+    await swatches.evaluateAll((els) =>
+      els.map((el) => el.getAttribute("aria-label") || ""),
+    )
+  ).map((label) => {
+    const match = label.match(/^Fill from image (#[0-9a-f]{6})$/);
+    if (!match) throw new Error("Unexpected swatch label: " + label);
+    return match[1];
+  });
+  // The biggest area comes first, and it is the picture's own orange rather
+  // than the centre of a quantisation cube.
+  const [r, g, b] = channels(colors[0]);
+  expect(r).toBeGreaterThan(245);
+  expect(g).toBeGreaterThan(120);
+  expect(g).toBeLessThan(160);
+  expect(b).toBeGreaterThan(60);
+  expect(b).toBeLessThan(115);
+  // The white circle is offered next to it.
+  expect(
+    colors.some((color) => {
+      const [cr, cg, cb] = channels(color);
+      return cr > 235 && cg > 235 && cb > 235;
+    }),
+  ).toBe(true);
+
+  // Tapping a swatch fills the page solid, straight away.
+  await swatches.first().click();
+  await expect
+    .poll(() => savedBackground(page))
+    .toMatchObject({ type: "solid", color: colors[0] });
+
+  // And a tile turns the same colours into a gradient.
+  await page.getByRole("button", { name: "Use Photo · soft" }).click();
+  await expect
+    .poll(() => savedBackground(page))
+    .toMatchObject({ type: "linear" });
+  const gradient = await savedBackground(page);
+  expect(gradient.colors).toHaveLength(2);
+  expect(gradient.colors[1]).toBe(colors[0]);
+  // The pale end is a light wash of that colour.
+  expect(channels(gradient.colors[0])[0]).toBeGreaterThan(240);
+});
+
+test("a device screenshot can colour the page too", async ({ page }) => {
+  await page.getByRole("button", { name: "Frames", exact: true }).click();
+  const chooser = page.waitForEvent("filechooser");
+  await page
+    .getByRole("button", { name: "Upload a screenshot", exact: true })
+    .click();
+  await (
+    await chooser
+  ).setFiles({
+    name: "app.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from(TONE_SVG),
+  });
+  await expect(page.getByLabel("Layer name")).toHaveValue("App screenshot");
+  // The selected device's screen is sampled when the page has no upload.
+  await page.getByRole("button", { name: "Use Photo · glow" }).click();
+  await expect
+    .poll(() => savedBackground(page))
+    .toMatchObject({ type: "radial" });
+});
+
+test("property fields update the canvas while they are still focused", async ({
+  page,
+}) => {
+  const b = await page.locator(".artboard-canvas").first().boundingBox();
+  if (!b) throw Error("Missing canvas");
+  const s = b.width / 1080;
+  await page.mouse.click(b.x + 200 * s, b.y + 260 * s);
+  await expect(page.getByLabel("Layer name")).toHaveValue("Headline");
+
+  /** A cheap fingerprint of what the artboard actually painted. */
+  const painted = () =>
+    page
+      .locator(".artboard-item.is-active canvas")
+      .first()
+      .evaluate((el) => {
+        const canvas = el as HTMLCanvasElement;
+        const { data } = canvas
+          .getContext("2d")!
+          .getImageData(0, 0, canvas.width, canvas.height);
+        let digest = 0;
+        for (let i = 0; i < data.length; i += 53)
+          digest = (digest * 33 + data[i]) | 0;
+        return digest;
+      });
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+  const before = await painted();
+
+  // Text size, typed and deliberately never blurred, tabbed away from or
+  // confirmed with Enter.
+  const size = page.getByLabel("Size", { exact: true });
+  await size.fill("84");
+  await expect(size).toBeFocused();
+  await expect
+    .poll(painted, { message: "the artboard repaints while typing" })
+    .not.toBe(before);
+
+  const resized = await painted();
+  // Position & size behave the same way: the object is already moved.
+  const x = page.getByLabel("X", { exact: true });
+  const startX = Number(await x.inputValue());
+  await x.fill(String(startX + 40));
+  await expect(x).toBeFocused();
+  await expect
+    .poll(painted, { message: "the object moves while typing" })
+    .not.toBe(resized);
+
+  // The project is updated too, still without the X field losing focus.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const saved = JSON.parse(
+          localStorage.getItem("zero-mockup-project-v1") || "null",
+        );
+        const headline = saved?.pages?.[0]?.objects?.find(
+          (o: { name: string }) => o.name === "Headline",
+        );
+        return [headline?.fontSize, headline?.x];
+      }),
+    )
+    .toEqual([84, startX + 40]);
+  await expect(x).toBeFocused();
+});
+
+test("every page still exports on a phone-sized screen", async ({ page }) => {
+  // On handheld layouts only the pages near the viewport keep a live Konva
+  // stage, so exporting all of them has to bring the others back first —
+  // this is the case that used to end in "Export failed".
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".artboard-item")).toHaveCount(3);
+  // The last page is far outside the viewport, so it is only a placeholder.
+  await expect(
+    page.locator(".artboard-item").nth(2).locator("canvas"),
+  ).toHaveCount(0);
+
+  await page.locator(".export-button").click();
+  await page.locator(".modal select").selectOption("all");
+  const zipPromise = page.waitForEvent("download");
+  await page
+    .getByRole("button", { name: "Export 3 pages", exact: true })
+    .click();
+  const zipDownload = await zipPromise;
+  const zip = await JSZip.loadAsync(
+    await fs.readFile((await zipDownload.path())!),
+  );
+  expect(Object.keys(zip.files)).toHaveLength(3);
+  for (const file of Object.values(zip.files)) {
+    const buffer = await file.async("nodebuffer");
+    expect(buffer.readUInt32BE(16)).toBe(1080);
+    expect(buffer.readUInt32BE(20)).toBe(1920);
+  }
+  // The success note, not the failure one.
+  await expect(page.locator(".toast")).toContainText("exported at");
+});
+
+test("a burst of typing in one property is a single undo step", async ({
+  page,
+}) => {
+  const b = await page.locator(".artboard-canvas").first().boundingBox();
+  if (!b) throw Error("Missing canvas");
+  const s = b.width / 1080;
+  await page.mouse.click(b.x + 200 * s, b.y + 260 * s);
+  const width = page.getByLabel("W", { exact: true });
+  await expect(width).toHaveValue("900");
+
+  await width.press("Control+a");
+  await page.keyboard.type("612", { delay: 40 });
+  await expect(width).toHaveValue("612");
+  await page.keyboard.press("Tab");
+  await page
+    .getByRole("button", { name: "Undo (Ctrl+Z)", exact: true })
+    .click();
+  await expect(width).toHaveValue("900");
 });
 
 test("grouping moves multiple layers together and can be undone", async ({

@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import {
   AlignLeft,
   AlignCenter,
@@ -31,11 +31,149 @@ import {
 } from "./model";
 import { ColorField, IconButton, NumberField, RangeField, Section } from "./ui";
 import { stableProps } from "./perf";
+import { sampleImagePalette, type SampledPalette } from "./palette";
+
+/** A gradient stop list rendered as a CSS background, matched to the canvas. */
+function gradientPreview(
+  colors: string[],
+  type: Background["type"],
+  angle: number,
+) {
+  return type === "radial"
+    ? `radial-gradient(circle at 50% 45%, ${colors.join(", ")})`
+    : `linear-gradient(${90 + angle}deg, ${colors.join(", ")})`;
+}
+
+/**
+ * Colours read from a picture already in the project — an uploaded page
+ * background, or the screenshot sitting on a selected device.
+ *
+ * Sampling runs off the render path: a small canvas is drawn once per source
+ * image and only the finished palette reaches React state, so typing in the
+ * panel stays instant while the pixels are being read.
+ */
+function usePhotoPalette(src: string | undefined, aspect: number) {
+  const [state, setState] = useState<{
+    loading: boolean;
+    palette?: SampledPalette;
+    error?: boolean;
+  }>({ loading: !!src });
+  useEffect(() => {
+    if (!src) {
+      setState({ loading: false });
+      return;
+    }
+    let cancelled = false;
+    setState({ loading: true });
+    sampleImagePalette(src, aspect)
+      .then((palette) => {
+        if (!cancelled)
+          setState({
+            loading: false,
+            // A picture that holds a single colour still deserves a swatch.
+            palette: palette.swatches.length ? palette : undefined,
+            error: !palette.swatches.length,
+          });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ loading: false, error: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [src, aspect]);
+  return state;
+}
+
+function PhotoColors({
+  src,
+  background,
+  pageAspect,
+  onApply,
+}: {
+  src: string;
+  /** The current background, so the tile in use can be marked as chosen. */
+  background: Background;
+  pageAspect: number;
+  onApply: (patch: Partial<Background>) => void;
+}) {
+  const { loading, palette, error } = usePhotoPalette(src, pageAspect);
+  return (
+    <Section title="Colours from your image">
+      <div className="photo-source">
+        <img src={src} alt="" />
+        <span>
+          {loading
+            ? "Reading the picture…"
+            : error
+              ? "This picture could not be read for colours."
+              : `${palette?.swatches.length} colours found`}
+        </span>
+      </div>
+      {palette && (
+        <>
+          <label className="field-label">Solid</label>
+          <div className="swatches photo">
+            {palette.swatches.map((color) => (
+              <button
+                key={color}
+                title={`Fill with ${color}`}
+                aria-label={`Fill from image ${color}`}
+                className={
+                  background.type === "solid" && background.color === color
+                    ? "chosen"
+                    : ""
+                }
+                style={{ background: color }}
+                onClick={() => onApply({ type: "solid", color })}
+              />
+            ))}
+          </div>
+          <label className="field-label">Gradient</label>
+          <div className="gradient-row photo">
+            {palette.gradients.map((g) => (
+              <button
+                key={g.name}
+                title={g.name}
+                aria-label={"Use " + g.name}
+                className={
+                  background.type === g.type &&
+                  background.colors.join() === g.colors.join()
+                    ? "chosen"
+                    : ""
+                }
+                style={{
+                  backgroundImage: gradientPreview(g.colors, g.type, g.angle),
+                }}
+                onClick={() =>
+                  onApply({
+                    type: g.type,
+                    colors: [...g.colors],
+                    angle: g.angle,
+                    color: g.colors[0],
+                  })
+                }
+              />
+            ))}
+          </div>
+          <p className="field-note">
+            <span className="green-dot" />
+            Sampled from your picture — tap to use
+          </p>
+        </>
+      )}
+    </Section>
+  );
+}
 export type InspectorProps = {
   page: Page;
   selected: DesignObject[];
-  patchPage: (p: Partial<Page>, label?: string) => void;
-  patchObjects: (p: Partial<DesignObject>, label?: string) => void;
+  patchPage: (p: Partial<Page>, label?: string, merge?: boolean) => void;
+  patchObjects: (
+    p: Partial<DesignObject>,
+    label?: string,
+    merge?: boolean,
+  ) => void;
   upload: (target: "screenshot" | "background" | "image") => void;
   remove: () => void;
   duplicate: () => void;
@@ -61,9 +199,25 @@ function Inspector({
 }: InspectorProps) {
   const o = selected.length === 1 ? selected[0] : undefined;
   const b = page.background;
+  /**
+   * Property edits are continuous gestures — typing digits, stepping a number
+   * field, dragging a slider, typing a name — so every keystroke reaches the
+   * canvas right away, while `merge` folds the burst into one undo step
+   * instead of one entry per character.
+   */
+  const setObject = (p: Partial<DesignObject>, label = "Object updated") =>
+    patchObjects(p, label, true);
+  const setPage = (p: Partial<Page>, label = "Page updated") =>
+    patchPage(p, label, true);
   const bg = (p: Partial<Background>) =>
-    patchPage({ background: { ...b, ...p } }, "Background updated");
+    setPage({ background: { ...b, ...p } }, "Background updated");
   const text = o?.kind === "text";
+  /**
+   * Which picture the colour sampler reads: the uploaded page background
+   * first, otherwise the artwork on a selected object — the screenshot on a
+   * device is usually exactly what the page should match.
+   */
+  const photoSrc = b.src || selected.find((item) => item.src)?.src;
   return (
     <aside className="inspector">
       <div className="panel-heading">
@@ -98,7 +252,7 @@ function Inspector({
                 onChange={(e) => {
                   const p = presets[Number(e.target.value)];
                   if (p)
-                    patchPage(
+                    setPage(
                       { width: p.width, height: p.height },
                       "Canvas resized",
                     );
@@ -116,7 +270,7 @@ function Inspector({
                   label="W"
                   value={page.width}
                   onChange={(v) =>
-                    patchPage({ width: Math.round(v) }, "Canvas resized")
+                    setPage({ width: Math.round(v) }, "Canvas resized")
                   }
                   min={100}
                   max={8000}
@@ -127,7 +281,7 @@ function Inspector({
                   label="H"
                   value={page.height}
                   onChange={(v) =>
-                    patchPage({ height: Math.round(v) }, "Canvas resized")
+                    setPage({ height: Math.round(v) }, "Canvas resized")
                   }
                   min={100}
                   max={8000}
@@ -176,9 +330,11 @@ function Inspector({
                     className="bg-thumb"
                     aria-hidden
                     style={{
-                      backgroundImage: `linear-gradient(${
-                        90 - b.angle
-                      }deg, ${b.colors.join(", ")})`,
+                      backgroundImage: gradientPreview(
+                        b.colors,
+                        "linear",
+                        b.angle,
+                      ),
                     }}
                   />
                   Gradient
@@ -247,12 +403,11 @@ function Inspector({
                             : ""
                         }
                         style={{
-                          backgroundImage:
-                            g.type === "radial"
-                              ? `radial-gradient(circle at 50% 45%, ${g.colors.join(
-                                  ", ",
-                                )})`
-                              : `linear-gradient(${90 - g.angle}deg, ${g.colors.join(", ")})`,
+                          backgroundImage: gradientPreview(
+                            g.colors,
+                            g.type,
+                            g.angle,
+                          ),
                         }}
                         onClick={() =>
                           bg({
@@ -368,6 +523,14 @@ function Inspector({
                 </>
               )}
             </Section>
+            {b.src && (
+              <PhotoColors
+                src={b.src}
+                background={b}
+                pageAspect={page.width / page.height}
+                onApply={(patch) => bg(patch)}
+              />
+            )}
             <Section title="Page settings">
               <label className="field-label" htmlFor="page-name">
                 Page name
@@ -377,7 +540,7 @@ function Inspector({
                 id="page-name"
                 value={page.name}
                 onChange={(e) =>
-                  patchPage({ name: e.target.value }, "Page renamed")
+                  setPage({ name: e.target.value }, "Page renamed")
                 }
               />
               <p className="muted-note">
@@ -401,7 +564,7 @@ function Inspector({
                   aria-label="Layer name"
                   value={o.name}
                   onChange={(e) =>
-                    patchObjects({ name: e.target.value }, "Layer renamed")
+                    setObject({ name: e.target.value }, "Layer renamed")
                   }
                 />
               </Section>
@@ -450,12 +613,12 @@ function Inspector({
                   <NumberField
                     label="X"
                     value={o.x}
-                    onChange={(x) => patchObjects({ x })}
+                    onChange={(x) => setObject({ x })}
                   />
                   <NumberField
                     label="Y"
                     value={o.y}
-                    onChange={(y) => patchObjects({ y })}
+                    onChange={(y) => setObject({ y })}
                   />
                 </div>
                 <div className="field-row">
@@ -463,13 +626,13 @@ function Inspector({
                     label="W"
                     value={o.width}
                     min={20}
-                    onChange={(width) => patchObjects({ width })}
+                    onChange={(width) => setObject({ width })}
                   />
                   <NumberField
                     label="H"
                     value={o.height}
                     min={20}
-                    onChange={(height) => patchObjects({ height })}
+                    onChange={(height) => setObject({ height })}
                   />
                 </div>
                 <div className="field-row">
@@ -479,7 +642,7 @@ function Inspector({
                     min={-360}
                     max={360}
                     suffix="°"
-                    onChange={(rotation) => patchObjects({ rotation })}
+                    onChange={(rotation) => setObject({ rotation })}
                   />
                   <NumberField
                     label="Opacity"
@@ -487,7 +650,7 @@ function Inspector({
                     min={0}
                     max={100}
                     suffix="%"
-                    onChange={(v) => patchObjects({ opacity: v / 100 })}
+                    onChange={(v) => setObject({ opacity: v / 100 })}
                   />
                 </div>
               </Section>
@@ -499,14 +662,14 @@ function Inspector({
                   className="text-input text-editor"
                   value={o.text}
                   onChange={(e) =>
-                    patchObjects({ text: e.target.value }, "Text edited")
+                    setObject({ text: e.target.value }, "Text edited")
                   }
                 />
                 <select
                   className="full-select"
                   aria-label="Font family"
                   value={o.fontFamily}
-                  onChange={(e) => patchObjects({ fontFamily: e.target.value })}
+                  onChange={(e) => setObject({ fontFamily: e.target.value })}
                 >
                   {[
                     "Manrope",
@@ -525,15 +688,13 @@ function Inspector({
                     min={8}
                     max={700}
                     value={o.fontSize || 60}
-                    onChange={(fontSize) => patchObjects({ fontSize })}
+                    onChange={(fontSize) => setObject({ fontSize })}
                   />
                   <select
                     aria-label="Font weight"
                     className="full-select"
                     value={o.fontWeight}
-                    onChange={(e) =>
-                      patchObjects({ fontWeight: e.target.value })
-                    }
+                    onChange={(e) => setObject({ fontWeight: e.target.value })}
                   >
                     <option value="normal">Regular</option>
                     <option value="bold">Bold</option>
@@ -543,7 +704,7 @@ function Inspector({
                 </div>
                 <ColorField
                   value={o.fill}
-                  onChange={(fill) => patchObjects({ fill })}
+                  onChange={(fill) => setObject({ fill })}
                 />
                 <div className="segmented">
                   {(["left", "center", "right"] as const).map((a, i) => (
@@ -551,7 +712,7 @@ function Inspector({
                       key={a}
                       aria-label={"Text align " + a}
                       className={o.align === a ? "selected" : ""}
-                      onClick={() => patchObjects({ align: a })}
+                      onClick={() => setObject({ align: a })}
                     >
                       {i === 0 ? (
                         <AlignLeft size={16} />
@@ -569,9 +730,7 @@ function Inspector({
                     value={o.letterSpacing || 0}
                     min={-20}
                     max={100}
-                    onChange={(letterSpacing) =>
-                      patchObjects({ letterSpacing })
-                    }
+                    onChange={(letterSpacing) => setObject({ letterSpacing })}
                   />
                   <NumberField
                     label="Line"
@@ -579,7 +738,7 @@ function Inspector({
                     min={0.5}
                     max={3}
                     step={0.1}
-                    onChange={(lineHeight) => patchObjects({ lineHeight })}
+                    onChange={(lineHeight) => setObject({ lineHeight })}
                   />
                 </div>
                 <button
@@ -587,7 +746,7 @@ function Inspector({
                   onClick={() => {
                     const lines = (o.text || "").split("\n");
                     const maxLine = Math.max(...lines.map((l) => l.length), 1);
-                    patchObjects(
+                    setObject(
                       {
                         fontSize: Math.floor(
                           Math.min(
@@ -609,13 +768,13 @@ function Inspector({
                   max={15}
                   suffix="px"
                   onChange={(strokeWidth) =>
-                    patchObjects({ strokeWidth, stroke: o.stroke || "#ffffff" })
+                    setObject({ strokeWidth, stroke: o.stroke || "#ffffff" })
                   }
                 />
                 {!!o.strokeWidth && (
                   <ColorField
                     value={o.stroke || "#ffffff"}
-                    onChange={(stroke) => patchObjects({ stroke })}
+                    onChange={(stroke) => setObject({ stroke })}
                   />
                 )}
               </Section>
@@ -634,7 +793,7 @@ function Inspector({
                   aria-label="Device style"
                   value={o.frame}
                   onChange={(e) =>
-                    patchObjects({
+                    setObject({
                       frame: e.target.value as DesignObject["frame"],
                     })
                   }
@@ -646,7 +805,7 @@ function Inspector({
                 <ColorField
                   label="Frame color"
                   value={o.fill}
-                  onChange={(fill) => patchObjects({ fill })}
+                  onChange={(fill) => setObject({ fill })}
                 />
                 <RangeField
                   label="3D perspective tilt"
@@ -654,7 +813,7 @@ function Inspector({
                   min={-35}
                   max={35}
                   suffix="°"
-                  onChange={(tilt) => patchObjects({ tilt })}
+                  onChange={(tilt) => setObject({ tilt })}
                 />
               </Section>
             )}
@@ -662,7 +821,7 @@ function Inspector({
               <Section title="Appearance">
                 <ColorField
                   value={o.fill}
-                  onChange={(fill) => patchObjects({ fill })}
+                  onChange={(fill) => setObject({ fill })}
                 />
                 <NumberField
                   label="Stroke"
@@ -670,13 +829,13 @@ function Inspector({
                   min={0}
                   max={80}
                   onChange={(strokeWidth) =>
-                    patchObjects({ strokeWidth, stroke: o.stroke || "#254e3b" })
+                    setObject({ strokeWidth, stroke: o.stroke || "#254e3b" })
                   }
                 />
                 {!!o.strokeWidth && (
                   <ColorField
                     value={o.stroke || "#254e3b"}
-                    onChange={(stroke) => patchObjects({ stroke })}
+                    onChange={(stroke) => setObject({ stroke })}
                   />
                 )}
               </Section>
@@ -688,7 +847,7 @@ function Inspector({
                   value={o.shadow || 0}
                   max={100}
                   suffix="px"
-                  onChange={(shadow) => patchObjects({ shadow })}
+                  onChange={(shadow) => setObject({ shadow })}
                 />
                 {o.kind !== "text" && (
                   <RangeField
@@ -696,7 +855,7 @@ function Inspector({
                     value={o.radius || 0}
                     max={150}
                     suffix="px"
-                    onChange={(radius) => patchObjects({ radius })}
+                    onChange={(radius) => setObject({ radius })}
                   />
                 )}
               </Section>
@@ -708,23 +867,31 @@ function Inspector({
                   value={(o.brightness || 0) * 100}
                   min={-50}
                   max={50}
-                  onChange={(v) => patchObjects({ brightness: v / 100 })}
+                  onChange={(v) => setObject({ brightness: v / 100 })}
                 />
                 <RangeField
                   label="Contrast"
                   value={o.contrast || 0}
                   min={-50}
                   max={50}
-                  onChange={(contrast) => patchObjects({ contrast })}
+                  onChange={(contrast) => setObject({ contrast })}
                 />
                 <RangeField
                   label="Saturation"
                   value={(o.saturation || 0) * 100}
                   min={-100}
                   max={100}
-                  onChange={(v) => patchObjects({ saturation: v / 100 })}
+                  onChange={(v) => setObject({ saturation: v / 100 })}
                 />
               </Section>
+            )}
+            {photoSrc && (
+              <PhotoColors
+                src={photoSrc}
+                background={b}
+                pageAspect={page.width / page.height}
+                onApply={(patch) => bg(patch)}
+              />
             )}
             <Section title="Arrange">
               <div className="field-row">

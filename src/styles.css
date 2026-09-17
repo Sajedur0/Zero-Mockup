@@ -1362,6 +1362,55 @@ h3 {
   outline: 1px solid #819b68;
   outline-offset: 2px;
 }
+/**
+ * Colours sampled from an uploaded picture: the thumbnail says where they
+ * came from, the circles are solid fills and the tiles are ready-made
+ * gradients built from the same photograph.
+ */
+.photo-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input);
+}
+.photo-source img {
+  height: 30px;
+  width: 30px;
+  object-fit: cover;
+  border-radius: 5px;
+  background: #00000010;
+  flex-shrink: 0;
+}
+.photo-source span {
+  font-size: 9px;
+  color: #8f9b80;
+  line-height: 1.4;
+}
+.swatches.photo > button {
+  width: 22px;
+  height: 22px;
+  border: 1px solid #2533191f;
+}
+.swatches.photo > button:hover {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.gradient-row.photo {
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 2px;
+  margin-bottom: 4px;
+}
+.gradient-row.photo > button {
+  height: 34px;
+}
+.gradient-row.photo > button:hover {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .text-action {
   font-size: 9px;
   display: flex;

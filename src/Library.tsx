@@ -54,7 +54,7 @@ export type LibraryProps = {
   apply: (i: number) => void;
   add: (o: DesignObject) => void;
   upload: (target: "screenshot" | "background" | "image") => void;
-  patch: (id: string, p: Partial<DesignObject>) => void;
+  patch: (id: string, p: Partial<DesignObject>, merge?: boolean) => void;
   updateBrand: (b: Project["brand"]) => void;
   history: HistoryEntry[];
   historyIndex: number;
@@ -694,7 +694,11 @@ function Library({
                       autoFocus
                       aria-label={"Rename " + o.name}
                       value={o.name}
-                      onChange={(e) => patch(o.id, { name: e.target.value })}
+                      // Renaming types one character at a time: keep the burst as one
+                      // undo step.
+                      onChange={(e) =>
+                        patch(o.id, { name: e.target.value }, true)
+                      }
                       onClick={(e) => e.stopPropagation()}
                       onBlur={() => setEditingLayer(null)}
                       onKeyDown={(e) => {
