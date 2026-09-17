@@ -56,7 +56,14 @@ import {
   X,
 } from "lucide-react";
 import Konva from "konva";
-import { isHandheld, rafThrottle, requestFonts, type FontNeed } from "./perf";
+import {
+  isHandheld,
+  nextFrame,
+  rafThrottle,
+  requestFonts,
+  waitFor,
+  type FontNeed,
+} from "./perf";
 import {
   baseObject,
   blankPage,
@@ -72,6 +79,12 @@ import {
   type Project,
 } from "./model";
 import { useProject } from "./useProject";
+import {
+  exportErrorReason,
+  exportPixelRatio,
+  isUsableImageUrl,
+  screenshotFilename,
+} from "./export";
 import Artboard from "./Artboard";
 import Inspector from "./Inspector";
 import Library, { type Tool } from "./Library";
@@ -810,65 +823,134 @@ export default function App() {
     e.target.value = "";
     setFileMenu(false);
   };
+  /**
+   * Turn the mounted pages into files.
+   *
+   * Everything that used to make this fail silently is handled here: pages
+   * that are still unmounted on phones are waited for instead of giving up
+   * after a fixed pause, the ZIP writer is only fetched when an archive is
+   * actually needed, an oversized canvas is rendered a little smaller rather
+   * than failing, and a page the browser could not rasterise is reported by
+   * name instead of "Export failed".
+   */
   const exportProject = async () => {
     setExporting(true);
     const pages = exportScope === "all" ? project.pages : [page];
+    const mimeType = exportFormat === "png" ? "image/png" : "image/jpeg";
+    const extension = exportFormat === "png" ? "png" : "jpeg";
     let mountedAll = false;
     try {
-      await document.fonts.ready;
+      // Text has to be measured with the real faces before the raster is
+      // taken. `document.fonts` is missing on old browsers, which used to
+      // throw here and look like an export failure.
+      try {
+        await document.fonts?.ready;
+      } catch {
+        /* Drawing with the fallback face is better than not exporting. */
+      }
       if (pages.some((p) => !stages.current.get(p.id))) {
-        // Offscreen pages are not mounted on phones; mount them for export.
+        // Offscreen pages are not mounted on phones; mount them for export
+        // and wait until their stages really exist — a fixed 260 ms pause
+        // lost the race on slower devices and aborted the whole export.
         setExportProgress("Preparing pages…");
         mountedAll = true;
         setRenderAllStages(true);
-        await new Promise((resolve) => setTimeout(resolve, 260));
-        await new Promise(requestAnimationFrame);
+        const ready = await waitFor(() =>
+          pages.every((p) => !!stages.current.get(p.id)),
+        );
+        if (!ready) setExportProgress("Finishing the offscreen pages…");
       }
-      // JSZip is only needed for multi-page exports, so it is not part of
-      // the startup bundle any more.
-      const { default: JSZip } = await import("jszip");
-      const zip = new JSZip();
+      const rendered: { name: string; url: string }[] = [];
+      const failed: { page: Page; reason: string }[] = [];
+      let reduced = false;
+      let zipFallback = false;
       for (let i = 0; i < pages.length; i++) {
         const p = pages[i];
         setExportProgress(`Rendering page ${i + 1} of ${pages.length}…`);
-        const stage = stages.current.get(p.id);
-        if (!stage) throw Error("Page is not ready");
-        const overlay = stage.findOne(".editor-overlay");
-        const background = stage.findOne(".page-background");
-        overlay?.hide();
-        if (transparent && exportFormat === "png") background?.hide();
-        let url = "";
         try {
-          stage.draw();
-          await new Promise(requestAnimationFrame);
-          url = stage.toDataURL({
-            mimeType: exportFormat === "png" ? "image/png" : "image/jpeg",
-            quality: 1,
-            pixelRatio: 1 / stage.scaleX(),
-          });
-        } finally {
-          overlay?.show();
-          background?.show();
-          stage.draw();
+          const stage = stages.current.get(p.id);
+          if (!stage)
+            throw new Error("the page did not finish drawing in time");
+          const overlay = stage.findOne(".editor-overlay");
+          const background = stage.findOne(".page-background");
+          const filename = screenshotFilename(i, p.name, extension);
+          try {
+            overlay?.hide();
+            if (transparent && exportFormat === "png") background?.hide();
+            const { ratio, reduced: shrunk } = exportPixelRatio(
+              p.width,
+              p.height,
+              stage.scaleX(),
+            );
+            reduced = reduced || shrunk;
+            const paint = async (pixelRatio: number) => {
+              stage.draw();
+              await nextFrame();
+              return stage.toDataURL({
+                mimeType,
+                quality: 1,
+                pixelRatio,
+              });
+            };
+            let url = await paint(ratio);
+            if (!isUsableImageUrl(url)) {
+              // "data:," means the browser refused the canvas: try again at
+              // half the size before reporting the page as failed.
+              url = await paint(Math.max(1, ratio / 2));
+            }
+            if (!isUsableImageUrl(url)) throw new Error("no picture came back");
+            rendered.push({ name: filename, url });
+          } finally {
+            overlay?.show();
+            background?.show();
+            stage.draw();
+          }
+        } catch (error) {
+          console.error(error);
+          failed.push({ page: p, reason: exportErrorReason(error) });
         }
-        const filename = `${String(i + 1).padStart(2, "0")}-${p.name.replace(/[^\p{L}\p{N} -]/gu, "")}.${exportFormat === "png" ? "png" : "jpg"}`;
-        if (pages.length === 1) download(url, filename);
-        else zip.file(filename, url.split(",")[1], { base64: true });
       }
-      if (pages.length > 1) {
+      if (!rendered.length)
+        throw new Error(failed[0]?.reason ?? "nothing could be rendered");
+
+      if (rendered.length === 1 && pages.length === 1) {
+        download(rendered[0].url, rendered[0].name);
+      } else {
         setExportProgress("Packaging your screenshots…");
-        download(
-          await zip.generateAsync({ type: "blob" }),
-          project.name + " — screenshots.zip",
-        );
+        try {
+          // JSZip is only needed for an archive, so a single picture never
+          // depends on a second chunk being downloaded.
+          const { default: JSZip } = await import("jszip");
+          const zip = new JSZip();
+          for (const file of rendered)
+            zip.file(file.name, file.url.split(",")[1], { base64: true });
+          download(
+            await zip.generateAsync({ type: "blob" }),
+            project.name + " — screenshots.zip",
+          );
+        } catch (error) {
+          console.error(error);
+          // Some browsers refuse very large archives; saving the pages one
+          // by one still gives the user their screenshots.
+          zipFallback = true;
+          for (const file of rendered) {
+            download(file.url, file.name);
+            await nextFrame(60);
+          }
+        }
       }
-      setModal(null);
+      const summary = failed.length
+        ? `${rendered.length} of ${pages.length} pages exported. “${failed[0].page.name}” failed: ${failed[0].reason}.`
+        : `${rendered.length === 1 ? "Screenshot" : rendered.length + " screenshots"} exported at ${reduced ? "the largest size this canvas allows" : "full resolution"}.`;
       notify(
-        `${pages.length === 1 ? "Screenshot" : pages.length + " screenshots"} exported at full resolution.`,
+        zipFallback
+          ? `${summary} The ZIP could not be built, so each page was saved as its own file.`
+          : summary,
       );
+      setModal(null);
     } catch (error) {
       console.error(error);
-      notify("Export failed. Try a smaller canvas or reload your image.");
+      notify(`Export failed: ${exportErrorReason(error)}.`);
     } finally {
       setExporting(false);
       setExportProgress("");

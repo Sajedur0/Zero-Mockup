@@ -455,6 +455,37 @@ test("property fields update the canvas while they are still focused", async ({
   await expect(x).toBeFocused();
 });
 
+test("every page still exports on a phone-sized screen", async ({ page }) => {
+  // On handheld layouts only the pages near the viewport keep a live Konva
+  // stage, so exporting all of them has to bring the others back first —
+  // this is the case that used to end in "Export failed".
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".artboard-item")).toHaveCount(3);
+  // The last page is far outside the viewport, so it is only a placeholder.
+  await expect(
+    page.locator(".artboard-item").nth(2).locator("canvas"),
+  ).toHaveCount(0);
+
+  await page.locator(".export-button").click();
+  await page.locator(".modal select").selectOption("all");
+  const zipPromise = page.waitForEvent("download");
+  await page
+    .getByRole("button", { name: "Export 3 pages", exact: true })
+    .click();
+  const zipDownload = await zipPromise;
+  const zip = await JSZip.loadAsync(
+    await fs.readFile((await zipDownload.path())!),
+  );
+  expect(Object.keys(zip.files)).toHaveLength(3);
+  for (const file of Object.values(zip.files)) {
+    const buffer = await file.async("nodebuffer");
+    expect(buffer.readUInt32BE(16)).toBe(1080);
+    expect(buffer.readUInt32BE(20)).toBe(1920);
+  }
+  // The success note, not the failure one.
+  await expect(page.locator(".toast")).toContainText("exported at");
+});
+
 test("a burst of typing in one property is a single undo step", async ({
   page,
 }) => {

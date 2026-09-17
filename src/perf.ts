@@ -163,3 +163,44 @@ export function requestFonts(needs: FontNeed[]) {
     .catch(() => {})
     .then(() => window.dispatchEvent(new Event("zero:fonts-updated")));
 }
+
+/**
+ * Resolve on the next paint, but never hang on one.
+ *
+ * Export code waits for Konva to finish a frame before reading pixels, and
+ * `requestAnimationFrame` never fires in a hidden or throttled tab — which is
+ * how an export could sit on "Rendering page 1…" forever. The timeout makes
+ * the wait bounded, and Node (no rAF at all) takes the same path.
+ */
+export function nextFrame(ms = 100) {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    if (typeof requestAnimationFrame === "function")
+      requestAnimationFrame(finish);
+    setTimeout(finish, ms);
+  });
+}
+
+/**
+ * Wait for something to become true — mounted Konva stages, mostly.
+ *
+ * Returns `false` instead of throwing when the budget runs out, so the caller
+ * can report which part of the work is missing.
+ */
+export async function waitFor(
+  ready: () => boolean,
+  timeout = 6000,
+  interval = 100,
+) {
+  const deadline = Date.now() + timeout;
+  while (!ready()) {
+    if (Date.now() > deadline) return false;
+    await nextFrame(interval);
+  }
+  return true;
+}

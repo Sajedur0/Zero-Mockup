@@ -46,7 +46,7 @@ On mobile, **Tools** opens a bottom sheet with horizontally scrollable tool cate
 - Layer selection and rename (double-click), visibility/lock, four stacking operations, grouping/ungrouping.
 - Instant property editing: numbers (position, size, text size, spacing, outline), sliders, colors, alignment and names update the canvas on each keystroke or drag, and a gesture collapses into one undo entry.
 - Drag, resize and rotate handles; group transforms; box/Shift/Select-mode selection; center snapping guides; page alignment and three-object distribution; copy/paste, duplicate, delete and keyboard nudging.
-- Exact-canvas-size PNG and maximum-quality JPG; optional transparent PNG; all-pages ZIP export. Editor guides and selection handles are excluded from exports.
+- Exact-canvas-size PNG and maximum-quality JPG; optional transparent PNG; all-pages ZIP export. Editor guides and selection handles are excluded from exports. Pages that are offscreen on phones are waited for before rendering, a canvas larger than the browser can rasterise is exported at the largest size that fits (never a silent blank file), and if the ZIP writer cannot be loaded each page is saved as its own file.
 - Browser autosave, editable JSON save/import with validation, a 70-step undo/redo history, brand colors/font, dark/light theme and a UI-free page preview.
 - Screenshot/image brightness, contrast and saturation controls.
 - Resizable and collapsible desktop panels, combined tablet drawers and mobile bottom sheets.
@@ -92,6 +92,7 @@ Copy/paste is a private editor clipboard and does not read the system clipboard.
 - `src/fields.ts` — the typing rules behind the live numeric property fields.
 - `src/model.ts` — serializable document schema, import validation, presets and original demo artwork.
 - `src/palette.ts` — colour sampling for uploaded pictures, from pixel histogram to solid swatches and gradients.
+- `src/export.ts` — rasterisation limits, file names and export error wording.
 - `src/useProject.ts` — undo/redo and local persistence.
 - `src/fonts.css` / `src/styles.css` — bundled fonts, responsive layouts and themes.
 - `src/*.test.ts` / `tests/editor.spec.ts` — unit and browser integration tests.
