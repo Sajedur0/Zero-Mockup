@@ -1235,7 +1235,7 @@ export default function App() {
             <MousePointer2 size={17} />
           </IconButton>
           <IconButton
-            label="Pan tool (H) — move objects freely or pan the canvas"
+            label="Pan tool (H) — move the workspace"
             active={panMode}
             onClick={() => {
               setPanMode(true);

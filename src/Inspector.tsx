@@ -25,6 +25,7 @@ import {
   type DesignObject,
   type Page,
   type Background,
+  gradients,
   palettes,
   presets,
 } from "./model";
@@ -143,25 +144,58 @@ function Inspector({
               </p>
             </Section>
             <Section title="Background">
-              <div className="segmented">
+              {/* Solid / gradient / image, each with a preview of what it
+                  currently paints. */}
+              <div
+                className="bg-types"
+                role="group"
+                aria-label="Background type"
+              >
                 <button
                   className={b.type === "solid" ? "selected" : ""}
+                  aria-pressed={b.type === "solid"}
+                  title="Flat color"
                   onClick={() => bg({ type: "solid" })}
                 >
+                  <span
+                    className="bg-thumb"
+                    aria-hidden
+                    style={{ background: b.color }}
+                  />
                   Solid
                 </button>
                 <button
                   className={
                     ["linear", "radial"].includes(b.type) ? "selected" : ""
                   }
+                  aria-pressed={["linear", "radial"].includes(b.type)}
+                  title="Two or more colors blended together"
                   onClick={() => bg({ type: "linear" })}
                 >
+                  <span
+                    className="bg-thumb"
+                    aria-hidden
+                    style={{
+                      backgroundImage: `linear-gradient(${
+                        90 - b.angle
+                      }deg, ${b.colors.join(", ")})`,
+                    }}
+                  />
                   Gradient
                 </button>
                 <button
                   className={b.type === "image" ? "selected" : ""}
+                  aria-pressed={b.type === "image"}
+                  title="Your own picture, optionally blurred"
                   onClick={() => bg({ type: "image" })}
                 >
+                  <span className="bg-thumb" aria-hidden>
+                    {b.src ? (
+                      <img src={b.src} alt="" />
+                    ) : (
+                      <ImagePlus size={14} />
+                    )}
+                  </span>
                   Image
                 </button>
               </div>
@@ -199,6 +233,38 @@ function Inspector({
               ) : null}
               {["linear", "radial"].includes(b.type) && (
                 <>
+                  <label className="field-label">Ready-made gradients</label>
+                  <div className="gradient-row">
+                    {gradients.map((g) => (
+                      <button
+                        key={g.name}
+                        title={g.name}
+                        aria-label={"Use gradient " + g.name}
+                        className={
+                          b.colors.join() === g.colors.join() &&
+                          b.type === g.type
+                            ? "chosen"
+                            : ""
+                        }
+                        style={{
+                          backgroundImage:
+                            g.type === "radial"
+                              ? `radial-gradient(circle at 50% 45%, ${g.colors.join(
+                                  ", ",
+                                )})`
+                              : `linear-gradient(${90 - g.angle}deg, ${g.colors.join(", ")})`,
+                        }}
+                        onClick={() =>
+                          bg({
+                            type: g.type,
+                            colors: [...g.colors],
+                            angle: g.angle,
+                            color: g.colors[0],
+                          })
+                        }
+                      />
+                    ))}
+                  </div>
                   <select
                     className="full-select"
                     aria-label="Gradient type"

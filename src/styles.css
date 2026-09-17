@@ -1233,6 +1233,68 @@ h3 {
 .segmented > button:hover {
   color: #597042;
 }
+/* Background type picker: three tiles with a live preview of each mode. */
+.bg-types {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.bg-types > button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 4px 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input);
+  color: #9ba48f;
+  font-size: 9px;
+  line-height: 1;
+}
+.bg-types > button:hover {
+  color: #597042;
+  border-color: #cfdac2;
+}
+.bg-types > button.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: #a5583c;
+}
+.bg-thumb {
+  width: 100%;
+  height: 30px;
+  border-radius: 5px;
+  border: 1px solid #00000010;
+  background: #ffffff8c;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: #a9b39c;
+  background-size: cover;
+  background-position: center;
+}
+.bg-thumb > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.gradient-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.gradient-row > button {
+  height: 28px;
+  border-radius: 5px;
+  border: 1px solid #00000010;
+}
+.gradient-row > button.chosen {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .field-label {
   display: block;
   font-size: 9px;

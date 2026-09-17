@@ -47,7 +47,14 @@ test("background, custom dimensions, undo and redo", async ({ page }) => {
   await expect(page.getByLabel("Color hex", { exact: true })).toHaveValue(
     "#AACC99",
   );
+  // Background offers solid, gradient and image as picture tiles.
+  await expect(page.locator(".bg-types > button")).toHaveCount(3);
   await page.getByRole("button", { name: "Gradient", exact: true }).click();
+  // A ready-made gradient fills both stops and the angle.
+  await page.getByRole("button", { name: "Use gradient Lilac haze" }).click();
+  await expect(page.getByLabel("Stop 1 hex")).toHaveValue("#EBE5F5");
+  await expect(page.getByLabel("Stop 2 hex")).toHaveValue("#A79AD0");
+  await expect(page.getByLabel("Angle")).toHaveValue("160");
   await page.getByRole("button", { name: "Add color stop" }).click();
   await expect(page.getByLabel("Stop 3 hex")).toBeVisible();
   await page.getByLabel("W", { exact: true }).fill("1024");
