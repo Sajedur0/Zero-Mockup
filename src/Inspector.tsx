@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import {
   AlignLeft,
   AlignCenter,
@@ -31,6 +31,140 @@ import {
 } from "./model";
 import { ColorField, IconButton, NumberField, RangeField, Section } from "./ui";
 import { stableProps } from "./perf";
+import { sampleImagePalette, type SampledPalette } from "./palette";
+
+/** A gradient stop list rendered as a CSS background, matched to the canvas. */
+function gradientPreview(
+  colors: string[],
+  type: Background["type"],
+  angle: number,
+) {
+  return type === "radial"
+    ? `radial-gradient(circle at 50% 45%, ${colors.join(", ")})`
+    : `linear-gradient(${90 + angle}deg, ${colors.join(", ")})`;
+}
+
+/**
+ * Colours read from a picture already in the project — an uploaded page
+ * background, or the screenshot sitting on a selected device.
+ *
+ * Sampling runs off the render path: a small canvas is drawn once per source
+ * image and only the finished palette reaches React state, so typing in the
+ * panel stays instant while the pixels are being read.
+ */
+function usePhotoPalette(src: string | undefined, aspect: number) {
+  const [state, setState] = useState<{
+    loading: boolean;
+    palette?: SampledPalette;
+    error?: boolean;
+  }>({ loading: !!src });
+  useEffect(() => {
+    if (!src) {
+      setState({ loading: false });
+      return;
+    }
+    let cancelled = false;
+    setState({ loading: true });
+    sampleImagePalette(src, aspect)
+      .then((palette) => {
+        if (!cancelled)
+          setState({
+            loading: false,
+            // A picture that holds a single colour still deserves a swatch.
+            palette: palette.swatches.length ? palette : undefined,
+            error: !palette.swatches.length,
+          });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ loading: false, error: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [src, aspect]);
+  return state;
+}
+
+function PhotoColors({
+  src,
+  background,
+  pageAspect,
+  onApply,
+}: {
+  src: string;
+  /** The current background, so the tile in use can be marked as chosen. */
+  background: Background;
+  pageAspect: number;
+  onApply: (patch: Partial<Background>) => void;
+}) {
+  const { loading, palette, error } = usePhotoPalette(src, pageAspect);
+  return (
+    <Section title="Colours from your image">
+      <div className="photo-source">
+        <img src={src} alt="" />
+        <span>
+          {loading
+            ? "Reading the picture…"
+            : error
+              ? "This picture could not be read for colours."
+              : `${palette?.swatches.length} colours found`}
+        </span>
+      </div>
+      {palette && (
+        <>
+          <label className="field-label">Solid</label>
+          <div className="swatches photo">
+            {palette.swatches.map((color) => (
+              <button
+                key={color}
+                title={`Fill with ${color}`}
+                aria-label={`Fill from image ${color}`}
+                className={
+                  background.type === "solid" && background.color === color
+                    ? "chosen"
+                    : ""
+                }
+                style={{ background: color }}
+                onClick={() => onApply({ type: "solid", color })}
+              />
+            ))}
+          </div>
+          <label className="field-label">Gradient</label>
+          <div className="gradient-row photo">
+            {palette.gradients.map((g) => (
+              <button
+                key={g.name}
+                title={g.name}
+                aria-label={"Use " + g.name}
+                className={
+                  background.type === g.type &&
+                  background.colors.join() === g.colors.join()
+                    ? "chosen"
+                    : ""
+                }
+                style={{
+                  backgroundImage: gradientPreview(g.colors, g.type, g.angle),
+                }}
+                onClick={() =>
+                  onApply({
+                    type: g.type,
+                    colors: [...g.colors],
+                    angle: g.angle,
+                    color: g.colors[0],
+                  })
+                }
+              />
+            ))}
+          </div>
+          <p className="field-note">
+            <span className="green-dot" />
+            Sampled from your picture — tap to use
+          </p>
+        </>
+      )}
+    </Section>
+  );
+}
 export type InspectorProps = {
   page: Page;
   selected: DesignObject[];
@@ -78,6 +212,12 @@ function Inspector({
   const bg = (p: Partial<Background>) =>
     setPage({ background: { ...b, ...p } }, "Background updated");
   const text = o?.kind === "text";
+  /**
+   * Which picture the colour sampler reads: the uploaded page background
+   * first, otherwise the artwork on a selected object — the screenshot on a
+   * device is usually exactly what the page should match.
+   */
+  const photoSrc = b.src || selected.find((item) => item.src)?.src;
   return (
     <aside className="inspector">
       <div className="panel-heading">
@@ -190,9 +330,11 @@ function Inspector({
                     className="bg-thumb"
                     aria-hidden
                     style={{
-                      backgroundImage: `linear-gradient(${
-                        90 - b.angle
-                      }deg, ${b.colors.join(", ")})`,
+                      backgroundImage: gradientPreview(
+                        b.colors,
+                        "linear",
+                        b.angle,
+                      ),
                     }}
                   />
                   Gradient
@@ -261,12 +403,11 @@ function Inspector({
                             : ""
                         }
                         style={{
-                          backgroundImage:
-                            g.type === "radial"
-                              ? `radial-gradient(circle at 50% 45%, ${g.colors.join(
-                                  ", ",
-                                )})`
-                              : `linear-gradient(${90 - g.angle}deg, ${g.colors.join(", ")})`,
+                          backgroundImage: gradientPreview(
+                            g.colors,
+                            g.type,
+                            g.angle,
+                          ),
                         }}
                         onClick={() =>
                           bg({
@@ -382,6 +523,14 @@ function Inspector({
                 </>
               )}
             </Section>
+            {b.src && (
+              <PhotoColors
+                src={b.src}
+                background={b}
+                pageAspect={page.width / page.height}
+                onApply={(patch) => bg(patch)}
+              />
+            )}
             <Section title="Page settings">
               <label className="field-label" htmlFor="page-name">
                 Page name
@@ -735,6 +884,14 @@ function Inspector({
                   onChange={(v) => setObject({ saturation: v / 100 })}
                 />
               </Section>
+            )}
+            {photoSrc && (
+              <PhotoColors
+                src={photoSrc}
+                background={b}
+                pageAspect={page.width / page.height}
+                onApply={(patch) => bg(patch)}
+              />
             )}
             <Section title="Arrange">
               <div className="field-row">

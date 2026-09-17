@@ -30,7 +30,7 @@ Deploy the generated `dist/` directory to any static hosting provider. All fonts
 2. Pick a template, or add text, a frame, shapes, icons and uploaded artwork from the tool rail.
 3. Use **Frames → Upload a screenshot** to replace a device's screen. Select a particular device first when a page contains several frames.
 4. Select objects on the canvas to edit their properties — every field, including **Position & size** and text size, is applied to the canvas as you type or drag, and undo treats one burst of typing as a single step. Double-click text to focus its text editor. Hold Shift, draw a selection rectangle, or enable Select mode to select multiple objects.
-5. Adjust the background and page dimensions when no object is selected.
+5. Adjust the background and page dimensions when no object is selected. With a picture in the project, **Colours from your image** reads it and offers solid fills and ready-made gradients built from it.
 6. Use **Export** for a single PNG/JPG or a ZIP of every page. **Save project** downloads editable JSON, including uploaded images and the brand kit.
 
 On mobile, **Tools** opens a bottom sheet with horizontally scrollable tool categories. **Properties** edits the current page/selection, and **Layers** exposes objects that are difficult to tap on the canvas. Pinch to zoom; two fingers pan the canvas. Undo/redo remain available in the top toolbar.
@@ -39,6 +39,7 @@ On mobile, **Tools** opens a bottom sheet with horizontally scrollable tool cate
 
 - Multiple artboards, custom pixel dimensions, phone/tablet/feature-graphic/icon presets, page duplicate/delete and fit/zoom/pan.
 - Solid colors, linear/radial gradients with 2–6 evenly spaced color stops and angle, uploaded backgrounds with opacity/blur, dots/grid/waves patterns.
+- Colour sampling from any picture in the project (page background, or the screenshot on a selected frame): the areas that cover the page become solid swatches and four gradients (_soft_, _bold_, _glow_, _duo_). Sampling happens once per picture on a 120 px working canvas, so the panel stays responsive.
 - Android, iPhone-style and frameless devices; automatic cover-cropping of screenshots; frame colors, radius, rotation, shadow, and cached 3D Y-axis perspective projection.
 - Unicode text, bundled Google font families including **Noto Sans Bengali**, size/style/color/alignment, spacing, line height, outline/shadow and explicit auto-fit.
 - Rectangle, circle, line, arrow, star, sparkle, blob, text badges, image/logo uploads and a lazily loaded searchable Lucide icon library.
@@ -90,6 +91,7 @@ Copy/paste is a private editor clipboard and does not read the system clipboard.
 - `src/Inspector.tsx` / `src/ui.tsx` — property controls and accessible modal primitives.
 - `src/fields.ts` — the typing rules behind the live numeric property fields.
 - `src/model.ts` — serializable document schema, import validation, presets and original demo artwork.
+- `src/palette.ts` — colour sampling for uploaded pictures, from pixel histogram to solid swatches and gradients.
 - `src/useProject.ts` — undo/redo and local persistence.
 - `src/fonts.css` / `src/styles.css` — bundled fonts, responsive layouts and themes.
 - `src/*.test.ts` / `tests/editor.spec.ts` — unit and browser integration tests.
